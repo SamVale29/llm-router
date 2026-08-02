@@ -1,0 +1,26 @@
+{
+  "name": "@llm-router/core",
+  "version": "0.1.0",
+  "description": "Policy-driven, capability-aware LLM routing core.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "schemas"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.8.0",
+    "zod": "^3.25.7"
+  }
+}

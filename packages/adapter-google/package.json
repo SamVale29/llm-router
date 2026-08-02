@@ -1,0 +1,24 @@
+{
+  "name": "@llm-router/adapter-google",
+  "version": "0.1.0",
+  "description": "Google Gemini generateContent adapter for LLM Router.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@llm-router/core": "workspace:*"
+  }
+}

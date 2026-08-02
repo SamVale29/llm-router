@@ -1,0 +1,16 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Review this TypeScript function and return structured issues."
+    }
+  ],
+  "hints": { "task": "code-review" },
+  "output": {
+    "schema": {
+      "type": "object",
+      "required": ["issues"],
+      "properties": { "issues": { "type": "array" } }
+    }
+  }
+}

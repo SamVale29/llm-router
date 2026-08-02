@@ -1,0 +1,14 @@
+name: New provider adapter
+description: Propose support for a provider or deployment
+labels: ["adapter", "enhancement"]
+body:
+  - type: textarea
+    id: context
+    attributes: { label: Context, description: Why is this adapter useful? }
+    validations: { required: true }
+  - type: textarea
+    id: scope
+    attributes: { label: Scope, description: Endpoints, capabilities and limitations. }
+  - type: textarea
+    id: acceptance
+    attributes: { label: Acceptance criteria, description: Contract tests, docs and fixtures. }

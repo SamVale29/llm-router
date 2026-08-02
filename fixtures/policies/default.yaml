@@ -1,0 +1,45 @@
+version: "1.0.0"
+defaults:
+  strategy: weighted-score
+  fallbackAllowed: true
+models:
+  - { id: demo-code-pro, provider: demo-openai, model: demo-code-pro }
+  - { id: demo-economy, provider: demo-openrouter, model: demo-economy }
+  - { id: demo-vision, provider: demo-google, model: demo-vision }
+  - { id: demo-long-context, provider: demo-anthropic, model: demo-long-context }
+routes:
+  - id: code
+    when: { task: code-review }
+    require: { capabilities: [structured-outputs] }
+    prefer: { tags: [code] }
+    select:
+      strategy:
+        {
+          kind: weighted-score,
+          weights: { taskFit: 0.45, quality: 0.30, cost: 0.15, latency: 0.10 },
+        }
+  - id: translation
+    when: { task: translation }
+    select: { strategy: cheapest-qualified }
+  - id: ocr
+    when: { task: ocr }
+    require: { inputModalities: [image] }
+    select: { strategy: cheapest-qualified, candidates: [demo-vision] }
+  - id: long-summary
+    when: { task: long-document-summarization }
+    require: { minContextTokens: 100000 }
+    select: { strategy: weighted-score }
+fallbacks:
+  - {
+      from: demo-code-pro,
+      to: [demo-long-context, demo-economy],
+      on: [rate-limit, timeout, unavailable],
+    }
+resilience:
+  deadlineMs: 20000
+  retry:
+    maxAttempts: 2
+    retryableErrors: [rate-limit, timeout, unavailable]
+  fallback:
+    maxModelFallbacks: 2
+    errors: [rate-limit, timeout, unavailable]

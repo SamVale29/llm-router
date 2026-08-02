@@ -1,0 +1,12 @@
+version: "1.0.0-privacy"
+defaults:
+  strategy: priority
+  fallbackAllowed: false
+routes:
+  - id: private-eu
+    when: {}
+    require:
+      tags: [private]
+    select:
+      strategy: priority
+      candidates: [demo-private]

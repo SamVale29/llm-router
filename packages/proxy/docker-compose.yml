@@ -1,0 +1,7 @@
+services:
+  llm-router:
+    build: ../..
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      LLM_ROUTER_PROXY_TOKEN: "change-me-locally"

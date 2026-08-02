@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LLM Router policy",
+  "type": "object",
+  "required": ["version", "routes"],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "fallbackAllowed": {
+          "type": "boolean"
+        },
+        "qualityProfile": {
+          "enum": ["economy", "balanced", "premium"]
+        },
+        "strategy": {
+          "type": ["string", "object"]
+        }
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "provider", "model"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "when", "select"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "when": {
+            "type": "object"
+          },
+          "require": {
+            "type": "object"
+          },
+          "prefer": {
+            "type": "object"
+          },
+          "select": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "fallbacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to", "on"]
+      }
+    }
+  }
+}

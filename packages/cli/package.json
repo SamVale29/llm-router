@@ -1,0 +1,30 @@
+{
+  "name": "@llm-router/cli",
+  "version": "0.1.0",
+  "description": "CLI for policy validation, decisions, replay, evaluation and local proxy serving.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "llm-router": "dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@llm-router/catalog": "workspace:*",
+    "@llm-router/core": "workspace:*",
+    "@llm-router/evals": "workspace:*",
+    "@llm-router/proxy": "workspace:*"
+  }
+}

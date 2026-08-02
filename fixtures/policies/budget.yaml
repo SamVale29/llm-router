@@ -1,0 +1,8 @@
+version: "1.0.0-budget"
+defaults:
+  strategy: cheapest-qualified
+routes:
+  - id: budget
+    when: {}
+    select:
+      strategy: cheapest-qualified

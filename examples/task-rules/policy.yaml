@@ -1,0 +1,15 @@
+version: "example-rules"
+routes:
+  - id: code
+    when:
+      task: { anyOf: [code-generation, code-review, debugging] }
+    require:
+      capabilities: [structured-outputs]
+    prefer:
+      tags: [code]
+    select:
+      strategy: weighted-score
+      weights: { taskFit: 0.50, quality: 0.25, cost: 0.15, latency: 0.10 }
+  - id: translation
+    when: { task: translation }
+    select: { strategy: cheapest-qualified }

@@ -1,0 +1,48 @@
+{
+  "name": "llm-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An explainable, policy-driven router for choosing AI models by task, capabilities, cost, latency, privacy and reliability.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @llm-router/core --filter @llm-router/catalog --filter @llm-router/evals --filter @llm-router/observability --filter @llm-router/adapter-openai-compatible --filter @llm-router/adapter-openai --filter @llm-router/adapter-anthropic --filter @llm-router/adapter-google --filter @llm-router/adapter-openrouter --filter @llm-router/proxy --filter @llm-router/cli --filter @llm-router/testing run build && pnpm --filter @llm-router/playground run build",
+    "clean": "pnpm -r exec node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "dev": "pnpm --filter @llm-router/playground dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.check.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "catalog:validate": "tsx scripts/catalog.ts validate",
+    "catalog:build": "tsx scripts/catalog.ts build",
+    "catalog:diff": "tsx scripts/catalog.ts diff",
+    "catalog:check-sources": "tsx scripts/catalog.ts check-sources",
+    "eval:demo": "tsx scripts/eval-demo.ts",
+    "pack:check": "tsx scripts/pack-check.ts",
+    "release:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm catalog:validate && pnpm test && pnpm build && pnpm pack:check"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "@eslint/js": "^9.27.0",
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "eslint": "^9.27.0",
+    "eslint-import-resolver-typescript": "^4.3.5",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.4",
+    "typescript-eslint": "^8.32.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}

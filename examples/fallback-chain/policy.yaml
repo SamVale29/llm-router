@@ -1,0 +1,15 @@
+version: "fallback-example"
+defaults:
+  fallbackAllowed: true
+  strategy: priority
+routes:
+  - id: code
+    when: { task: code-review }
+    select: { strategy: priority, candidates: [demo-code-pro, demo-economy] }
+fallbacks:
+  - from: demo-code-pro
+    to: [demo-economy]
+    on: [rate-limit, timeout, unavailable]
+resilience:
+  retry: { maxAttempts: 2, retryableErrors: [rate-limit, timeout, unavailable] }
+  fallback: { maxModelFallbacks: 1, errors: [rate-limit, timeout, unavailable] }

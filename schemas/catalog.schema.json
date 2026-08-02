@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LLM Router catalog",
+  "type": "object",
+  "required": ["version", "providers", "models"],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "providers": {
+      "type": "array"
+    },
+    "models": {
+      "type": "array"
+    }
+  }
+}

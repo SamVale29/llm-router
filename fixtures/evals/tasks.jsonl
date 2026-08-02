@@ -1,0 +1,4 @@
+{"id":"code-001","task":"code-review","input":{"messages":[{"role":"user","content":"Review this TypeScript function and return issues."}]},"expected":{"type":"custom"},"metadata":{"domain":"software"}}
+{"id":"translation-001","task":"translation","input":{"messages":[{"role":"user","content":"Traduza este texto para o inglês."}]},"expected":{"type":"custom"},"metadata":{"language":"pt-BR"}}
+{"id":"ocr-001","task":"ocr","input":{"messages":[{"role":"user","content":[{"type":"text","text":"Extract the text."},{"type":"image","source":{"type":"url","value":"https://example.invalid/invoice.png"}}]}]},"expected":{"type":"schema"}}
+{"id":"summary-001","task":"long-document-summarization","input":{"messages":[{"role":"user","content":"Summarize the long report."}]},"expected":{"type":"custom"},"metadata":{"estimatedTokens":120000}}
