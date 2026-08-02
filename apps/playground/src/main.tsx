@@ -1,4 +1,4 @@
-import { StrictMode, useMemo, useState } from "react";
+import { StrictMode, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { demoCatalog } from "@llm-router/catalog";
@@ -201,7 +201,24 @@ function App(): ReactElement {
   const [decision, setDecision] = useState<RoutingDecision | null>(null);
   const [page, setPage] = useState("Overview");
   const [policyError, setPolicyError] = useState<string | null>(null);
+  const pageContentRef = useRef<HTMLDivElement>(null);
   const preset = presets.find((item) => item.id === presetId) ?? presets[0];
+  const isWorkspacePage =
+    page === "Overview" || page === "Request builder" || page === "Decision explorer";
+  const workspaceEyebrow = page === "Overview" ? "INTERACTIVE EXPLORER" : page.toUpperCase();
+  const workspaceTitle =
+    page === "Request builder"
+      ? "Build a request before it reaches a provider."
+      : page === "Decision explorer"
+        ? "Inspect every routing decision."
+        : "See the policy make the call.";
+
+  useEffect(() => {
+    const target =
+      page === "Overview" ? document.getElementById("overview") : pageContentRef.current;
+    target?.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [page]);
+
   const parsed = useMemo(() => {
     try {
       const value = parsePolicyYaml(policy, demoCatalog);
@@ -262,6 +279,7 @@ function App(): ReactElement {
             <button
               key={item}
               className={page === item ? "nav-item active" : "nav-item"}
+              aria-current={page === item ? "page" : undefined}
               onClick={() => setPage(item)}
             >
               {item}
@@ -277,7 +295,7 @@ function App(): ReactElement {
           </div>
         </aside>
         <main className="main-content">
-          <section className="hero">
+          <section className="hero" id="overview">
             <div>
               <p className="eyebrow accent">MODEL ROUTING AS CODE</p>
               <h1>
@@ -349,105 +367,121 @@ function App(): ReactElement {
               <span>decision trace</span>
             </div>
           </section>
-          <section className="workspace-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">INTERACTIVE EXPLORER</p>
-                <h2>See the policy make the call.</h2>
-              </div>
-              <button className="share-button" onClick={shareScenario}>
-                Share scenario ↗
-              </button>
-            </div>
-            <div className="explorer-grid">
-              <div className="control-column">
-                <label htmlFor="preset">Preset</label>
-                <select
-                  id="preset"
-                  data-testid="preset"
-                  value={presetId}
-                  onChange={(event) => choosePreset(event.target.value)}
-                >
-                  {presets.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="field-help">{preset?.note}</p>
-                <label htmlFor="request">Request text</label>
-                <textarea
-                  id="request"
-                  value={requestText}
-                  onChange={(event) => setRequestText(event.target.value)}
-                  rows={5}
-                />
-                <button
-                  className="primary full"
-                  data-testid="run-decision"
-                  onClick={runDecision}
-                  disabled={!parsed}
-                >
-                  Run decision <span>→</span>
-                </button>
-                <div className="policy-mini">
-                  <div className="mini-heading">
-                    <span>POLICY</span>
-                    <button onClick={() => setPage("Policy editor")}>Edit</button>
+          <div
+            ref={pageContentRef}
+            id="page-content"
+            className="page-content"
+            data-testid="page-content"
+          >
+            {isWorkspacePage && (
+              <section className="workspace-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">{workspaceEyebrow}</p>
+                    <h2 data-testid="page-heading">{workspaceTitle}</h2>
                   </div>
-                  <pre>{policy.split("\n").slice(0, 9).join("\n")}\n…</pre>
+                  <button className="share-button" onClick={shareScenario}>
+                    Share scenario ↗
+                  </button>
                 </div>
-              </div>
-              <div className="decision-column">
-                {decision ? <DecisionView decision={decision} /> : <EmptyDecision />}
-              </div>
-            </div>
-          </section>
-          {page === "Policy editor" && (
-            <section className="detail-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">POLICY EDITOR</p>
-                  <h2>Version routing rules with your codebase.</h2>
+                <div className="explorer-grid">
+                  <div className="control-column">
+                    <label htmlFor="preset">Preset</label>
+                    <select
+                      id="preset"
+                      data-testid="preset"
+                      value={presetId}
+                      onChange={(event) => choosePreset(event.target.value)}
+                    >
+                      {presets.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="field-help">{preset?.note}</p>
+                    <label htmlFor="request">Request text</label>
+                    <textarea
+                      id="request"
+                      value={requestText}
+                      onChange={(event) => setRequestText(event.target.value)}
+                      rows={5}
+                    />
+                    <button
+                      className="primary full"
+                      data-testid="run-decision"
+                      onClick={runDecision}
+                      disabled={!parsed}
+                    >
+                      Run decision <span>→</span>
+                    </button>
+                    <div className="policy-mini">
+                      <div className="mini-heading">
+                        <span>POLICY</span>
+                        <button onClick={() => setPage("Policy editor")}>Edit</button>
+                      </div>
+                      <pre>{policy.split("\n").slice(0, 9).join("\n")}\n…</pre>
+                    </div>
+                  </div>
+                  <div className="decision-column">
+                    {decision ? <DecisionView decision={decision} /> : <EmptyDecision />}
+                  </div>
                 </div>
-                <button className="secondary" onClick={() => setPolicy(policyText)}>
-                  Reset example
-                </button>
-              </div>
-              <textarea
-                className="policy-editor"
-                aria-label="Policy YAML"
-                value={policy}
-                onChange={(event) => setPolicy(event.target.value)}
+              </section>
+            )}
+            {page === "Policy editor" && (
+              <section className="detail-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">POLICY EDITOR</p>
+                    <h2 data-testid="page-heading">Version routing rules with your codebase.</h2>
+                  </div>
+                  <button className="secondary" onClick={() => setPolicy(policyText)}>
+                    Reset example
+                  </button>
+                </div>
+                <textarea
+                  className="policy-editor"
+                  aria-label="Policy YAML"
+                  value={policy}
+                  onChange={(event) => setPolicy(event.target.value)}
+                />
+                {policyError ? (
+                  <p className="error-banner">{policyError}</p>
+                ) : (
+                  <p className="valid-banner">✓ Valid policy · version {parsed?.version}</p>
+                )}
+              </section>
+            )}
+            {page === "Architecture" && <Architecture />}
+            {page === "Documentation" && <Documentation />}
+            {page === "Candidate comparison" && (
+              <section className="detail-panel">
+                <p className="eyebrow">CANDIDATE COMPARISON</p>
+                <h2 data-testid="page-heading">Every elimination is visible.</h2>
+                {decision ? (
+                  <CandidateTable decision={decision} />
+                ) : (
+                  <p className="placeholder-copy">
+                    Run a decision from the Request builder to compare qualified and eliminated
+                    candidates.
+                  </p>
+                )}
+              </section>
+            )}
+            {page === "Replay report" && (
+              <ReportPlaceholder
+                title="Replay report"
+                body="Load anonymized JSONL traces locally with the CLI to compare policy versions."
               />
-              {policyError ? (
-                <p className="error-banner">{policyError}</p>
-              ) : (
-                <p className="valid-banner">✓ Valid policy · version {parsed?.version}</p>
-              )}
-            </section>
-          )}
-          {page === "Architecture" && <Architecture />}
-          {page === "Documentation" && <Documentation />}
-          {page === "Candidate comparison" && decision && (
-            <section className="detail-panel">
-              <p className="eyebrow">CANDIDATE COMPARISON</p>
-              <h2>Every elimination is visible.</h2>
-              <CandidateTable decision={decision} />
-            </section>
-          )}
-          {page === "Replay report" && (
-            <ReportPlaceholder
-              title="Replay report"
-              body="Load anonymized JSONL traces locally with the CLI to compare policy versions."
-            />
-          )}
-          {page === "Evaluation report" && (
-            <ReportPlaceholder
-              title="Evaluation report"
-              body="Run the offline evaluation harness to generate JSON, Markdown, HTML and CSV reports."
-            />
-          )}
+            )}
+            {page === "Evaluation report" && (
+              <ReportPlaceholder
+                title="Evaluation report"
+                body="Run the offline evaluation harness to generate JSON, Markdown, HTML and CSV reports."
+              />
+            )}
+          </div>
         </main>
       </div>
     </div>
@@ -577,7 +611,7 @@ function Architecture(): ReactElement {
   return (
     <section className="detail-panel architecture">
       <p className="eyebrow">ARCHITECTURE</p>
-      <h2>Constraints before optimization.</h2>
+      <h2 data-testid="page-heading">Constraints before optimization.</h2>
       <div className="flow">
         <span>Request</span>
         <b>→</b>
@@ -603,7 +637,7 @@ function Documentation(): ReactElement {
   return (
     <section className="detail-panel documentation">
       <p className="eyebrow">DOCUMENTATION</p>
-      <h2>What to explore next.</h2>
+      <h2 data-testid="page-heading">What to explore next.</h2>
       <div className="doc-grid">
         <article>
           <span>01</span>
@@ -634,7 +668,7 @@ function ReportPlaceholder({ title, body }: { title: string; body: string }): Re
   return (
     <section className="detail-panel">
       <p className="eyebrow">OFFLINE REPORT</p>
-      <h2>{title}</h2>
+      <h2 data-testid="page-heading">{title}</h2>
       <p className="placeholder-copy">{body}</p>
     </section>
   );

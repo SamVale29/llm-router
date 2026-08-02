@@ -299,6 +299,9 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
+.page-content {
+  scroll-margin-top: 24px;
+}
 .workspace-panel,
 .detail-panel {
   background: #171513;
