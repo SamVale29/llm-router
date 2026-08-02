@@ -31,3 +31,15 @@ test("navigates every playground menu page", async ({ page }) => {
     await expect(page.getByTestId("page-heading")).toBeInViewport();
   }
 });
+
+test("renders local replay and evaluation reports", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Replay report", exact: true }).click();
+  await expect(page.getByTestId("replay-report")).toContainText("code-001");
+  await expect(page.getByTestId("replay-report")).toContainText("Replayed 4 anonymized traces");
+
+  await page.getByRole("button", { name: "Evaluation report", exact: true }).click();
+  await expect(page.getByTestId("evaluation-report")).toContainText("code-review");
+  await expect(page.getByTestId("evaluation-report")).toContainText("Decision-only evaluation");
+});

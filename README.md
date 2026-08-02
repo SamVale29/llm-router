@@ -7,7 +7,7 @@
 
 LLM Router is an explainable, policy-driven TypeScript router for choosing AI models by task, capabilities, cost, latency, privacy and reliability.
 
-[Try the decision-only playground](https://samvale29.github.io/llm-router/) · [Read the architecture](docs/architecture.md) · [Browse the release](https://github.com/SamVale29/llm-router/releases/tag/v0.1.0)
+[Try the decision-only playground](https://samvale29.github.io/llm-router/) · [Read the architecture](docs/architecture.md) · [Read the operations checklist](docs/operations.md) · [Browse the release](https://github.com/SamVale29/llm-router/releases/tag/v0.1.0)
 
 The demo does not call a provider and never asks for an API key. Its catalog uses clearly labeled illustrative values. Replace those values with observations from your own workload before production use.
 
@@ -180,7 +180,7 @@ pnpm test:e2e
 pnpm pack:check
 ```
 
-CI runs without paid provider calls. E2E uses the static playground. The catalog's public demo numbers are illustrative; they are not benchmarks or billing claims.
+`pnpm test:e2e` builds the playground before testing, so local runs never use a stale `dist/`. CI uses `pnpm test:e2e:ci` after its shared build. CI runs without paid provider calls. E2E uses the static playground. The catalog's public demo numbers are illustrative; they are not benchmarks or billing claims.
 
 ## Security and privacy
 

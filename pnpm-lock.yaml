@@ -61,6 +61,9 @@ importers:
       "@llm-router/core":
         specifier: workspace:*
         version: link:../../packages/core
+      "@llm-router/evals":
+        specifier: workspace:*
+        version: link:../../packages/evals
       react:
         specifier: ^19.1.0
         version: 19.2.8
