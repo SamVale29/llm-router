@@ -17,7 +17,7 @@ jobs:
       - run: pnpm release:check
       - run: pnpm catalog:build
       - run: git archive --format=tar.gz --output=llm-router-${{ github.ref_name }}.tar.gz HEAD
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: LLM Router ${{ github.ref_name }} — Explainable model routing
           body_path: RELEASE_NOTES.md
