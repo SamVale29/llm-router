@@ -11,6 +11,7 @@
   "dependencies": {
     "@llm-router/catalog": "workspace:*",
     "@llm-router/core": "workspace:*",
+    "@llm-router/evals": "workspace:*",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

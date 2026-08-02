@@ -3,6 +3,14 @@ import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { demoCatalog } from "@llm-router/catalog";
 import {
+  evaluateDataset,
+  replayTraces,
+  type EvalItem,
+  type EvalReport,
+  type ReplayReport,
+  type ReplayTrace,
+} from "@llm-router/evals";
+import {
   createRouter,
   parsePolicyYaml,
   type MessageContent,
@@ -180,6 +188,41 @@ const presets: Preset[] = [
   },
 ];
 
+const demoEvaluationDataset: EvalItem[] = [
+  {
+    id: "code-001",
+    task: "code-review",
+    input: { messages: presets.find((item) => item.id === "code-review")!.request.messages },
+    metadata: { domain: "software" },
+  },
+  {
+    id: "translation-001",
+    task: "translation",
+    input: { messages: presets.find((item) => item.id === "translation")!.request.messages },
+    metadata: { language: "pt-BR" },
+  },
+  {
+    id: "ocr-001",
+    task: "ocr",
+    input: { messages: presets.find((item) => item.id === "invoice-ocr")!.request.messages },
+  },
+  {
+    id: "summary-001",
+    task: "long-document-summarization",
+    input: { messages: presets.find((item) => item.id === "long-summary")!.request.messages },
+    metadata: { estimatedTokens: 120000 },
+  },
+];
+
+const demoReplayTraces: ReplayTrace[] = demoEvaluationDataset.map((item) => ({
+  id: item.id,
+  request: {
+    messages: item.input.messages,
+    hints: { task: item.task },
+    ...(item.metadata ? { metadata: item.metadata } : {}),
+  },
+}));
+
 const pages = [
   "Overview",
   "Policy editor",
@@ -201,6 +244,9 @@ function App(): ReactElement {
   const [decision, setDecision] = useState<RoutingDecision | null>(null);
   const [page, setPage] = useState("Overview");
   const [policyError, setPolicyError] = useState<string | null>(null);
+  const [evaluationReport, setEvaluationReport] = useState<EvalReport | null>(null);
+  const [replayReport, setReplayReport] = useState<ReplayReport | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
   const pageContentRef = useRef<HTMLDivElement>(null);
   const preset = presets.find((item) => item.id === presetId) ?? presets[0];
   const isWorkspacePage =
@@ -229,6 +275,40 @@ function App(): ReactElement {
       return null;
     }
   }, [policy]);
+
+  useEffect(() => {
+    if (!parsed || (page !== "Evaluation report" && page !== "Replay report")) return;
+    let cancelled = false;
+    const router = createRouter({ catalog: demoCatalog, policy: parsed });
+    setReportError(null);
+    if (page === "Evaluation report") {
+      setEvaluationReport(null);
+      void evaluateDataset({
+        router,
+        policy: parsed,
+        dataset: demoEvaluationDataset,
+      })
+        .then((report) => {
+          if (!cancelled) setEvaluationReport(report);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled)
+            setReportError(error instanceof Error ? error.message : "Evaluation failed.");
+        });
+    } else {
+      setReplayReport(null);
+      void replayTraces(router, parsed, demoReplayTraces)
+        .then((report) => {
+          if (!cancelled) setReplayReport(report);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setReportError(error instanceof Error ? error.message : "Replay failed.");
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [page, parsed]);
 
   const runDecision = (): void => {
     if (!parsed || !preset) return;
@@ -470,16 +550,10 @@ function App(): ReactElement {
               </section>
             )}
             {page === "Replay report" && (
-              <ReportPlaceholder
-                title="Replay report"
-                body="Load anonymized JSONL traces locally with the CLI to compare policy versions."
-              />
+              <ReplayReportView report={replayReport} error={reportError} />
             )}
             {page === "Evaluation report" && (
-              <ReportPlaceholder
-                title="Evaluation report"
-                body="Run the offline evaluation harness to generate JSON, Markdown, HTML and CSV reports."
-              />
+              <EvaluationReportView report={evaluationReport} error={reportError} />
             )}
           </div>
         </main>
@@ -664,14 +738,174 @@ function Documentation(): ReactElement {
     </section>
   );
 }
-function ReportPlaceholder({ title, body }: { title: string; body: string }): ReactElement {
+function ReplayReportView({
+  report,
+  error,
+}: {
+  report: ReplayReport | null;
+  error: string | null;
+}) {
   return (
-    <section className="detail-panel">
-      <p className="eyebrow">OFFLINE REPORT</p>
-      <h2 data-testid="page-heading">{title}</h2>
-      <p className="placeholder-copy">{body}</p>
+    <section className="detail-panel report-panel" data-testid="replay-report">
+      <p className="eyebrow">OFFLINE REPLAY</p>
+      <h2 data-testid="page-heading">Replay report</h2>
+      {error ? (
+        <p className="error-banner">{error}</p>
+      ) : report ? (
+        <>
+          <div className="metrics report-metrics">
+            <div>
+              <span>Traces</span>
+              <strong>{report.rows.length}</strong>
+            </div>
+            <div>
+              <span>Changed</span>
+              <strong>{report.rows.filter((row) => row.changed).length}</strong>
+            </div>
+            <div>
+              <span>Regressions</span>
+              <strong>{report.rows.filter((row) => row.constraintRegression).length}</strong>
+            </div>
+            <div>
+              <span>Policy</span>
+              <strong>{report.policyVersion}</strong>
+            </div>
+          </div>
+          <p className="report-intro">
+            Replayed {report.rows.length} anonymized traces locally without calling a provider.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Trace</th>
+                  <th>Previous</th>
+                  <th>Candidate</th>
+                  <th>Change</th>
+                  <th>Cost delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.id}</td>
+                    <td>{row.previousModelId ?? "—"}</td>
+                    <td>{row.candidateModelId ?? "none"}</td>
+                    <td>
+                      <span className={row.changed ? "pill eliminated" : "pill eligible"}>
+                        {row.changed ? "changed" : "same"}
+                      </span>
+                    </td>
+                    <td>{formatDelta(row.previousCost, row.candidateCost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <p className="report-status" aria-live="polite">
+          Running the local replay…
+        </p>
+      )}
     </section>
   );
+}
+
+function EvaluationReportView({
+  report,
+  error,
+}: {
+  report: EvalReport | null;
+  error: string | null;
+}): ReactElement {
+  return (
+    <section className="detail-panel report-panel" data-testid="evaluation-report">
+      <p className="eyebrow">OFFLINE EVALUATION</p>
+      <h2 data-testid="page-heading">Evaluation report</h2>
+      {error ? (
+        <p className="error-banner">{error}</p>
+      ) : report ? (
+        <>
+          <div className="metrics report-metrics">
+            <div>
+              <span>Tasks</span>
+              <strong>{report.summary.total}</strong>
+            </div>
+            <div>
+              <span>Selected</span>
+              <strong>{report.summary.selected}</strong>
+            </div>
+            <div>
+              <span>Errors</span>
+              <strong>{formatPercent(report.summary.errorRate)}</strong>
+            </div>
+            <div>
+              <span>P95 latency</span>
+              <strong>{formatMilliseconds(report.summary.p95LatencyMs)}</strong>
+            </div>
+          </div>
+          <p className="report-intro">
+            Decision-only evaluation using {report.rows.length} local demo tasks. No provider calls
+            were made.
+          </p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Model</th>
+                  <th>Cost</th>
+                  <th>Latency</th>
+                  <th>Eligible</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.rows.map((row) => (
+                  <tr key={row.id}>
+                    <td>
+                      <strong>{row.task}</strong>
+                      <small>{row.id}</small>
+                    </td>
+                    <td>{row.selectedModelId ?? "none"}</td>
+                    <td>{formatCurrency(row.estimatedCost)}</td>
+                    <td>{formatMilliseconds(row.estimatedLatencyMs)}</td>
+                    <td>{row.eligibleCandidateCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul className="report-notes">
+            {report.notes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="report-status" aria-live="polite">
+          Running the local evaluation…
+        </p>
+      )}
+    </section>
+  );
+}
+
+function formatCurrency(value: number | null): string {
+  return value === null ? "unknown" : `$${value.toFixed(5)}`;
+}
+
+function formatMilliseconds(value: number | null): string {
+  return value === null ? "unknown" : `${value.toFixed(0)} ms`;
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatDelta(previous: number | null, candidate: number | null): string {
+  if (previous === null || candidate === null) return "unknown";
+  return `${candidate - previous >= 0 ? "+" : ""}$${(candidate - previous).toFixed(5)}`;
 }
 
 createRoot(document.getElementById("root")!).render(

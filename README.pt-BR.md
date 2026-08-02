@@ -4,7 +4,7 @@
 
 LLM Router é uma biblioteca TypeScript de roteamento orientada por políticas para escolher modelos por tarefa, capacidades, custo, latência, privacidade e confiabilidade.
 
-[Abra o playground decision-only](https://samvale29.github.io/llm-router/) · [Leia a arquitetura](docs/architecture.md) · [Veja a release v0.1.0](https://github.com/SamVale29/llm-router/releases/tag/v0.1.0)
+[Abra o playground decision-only](https://samvale29.github.io/llm-router/) · [Leia a arquitetura](docs/architecture.md) · [Leia o checklist operacional](docs/operations.md) · [Veja a release v0.1.0](https://github.com/SamVale29/llm-router/releases/tag/v0.1.0)
 
 O playground não chama providers e não pede API key. Os preços e scores do catálogo de demonstração são explicitamente ilustrativos. Substitua-os por observações do seu workload antes de produção.
 
