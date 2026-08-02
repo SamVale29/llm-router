@@ -5,12 +5,21 @@ import { demoCatalog } from "@llm-router/catalog";
 import {
   createRouter,
   parsePolicyYaml,
+  type MessageContent,
   type RoutingDecision,
   type RoutingRequest,
 } from "@llm-router/core";
 import "./styles.css";
 
 type Preset = { id: string; label: string; note: string; request: RoutingRequest };
+
+function messageContentToText(content: MessageContent | undefined): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => (part.type === "text" ? part.text : `[${part.type} attachment]`))
+    .join("\n");
+}
 
 const policyText = [
   'version: "1.0.0"',
@@ -187,7 +196,7 @@ function App(): ReactElement {
   const [policy, setPolicy] = useState(policyText);
   const [presetId, setPresetId] = useState("code-review");
   const [requestText, setRequestText] = useState(
-    presets[0]?.request.messages[0]?.content.toString() ?? "",
+    messageContentToText(presets[0]?.request.messages[0]?.content),
   );
   const [decision, setDecision] = useState<RoutingDecision | null>(null);
   const [page, setPage] = useState("Overview");
@@ -220,7 +229,7 @@ function App(): ReactElement {
   const choosePreset = (id: string): void => {
     const next = presets.find((item) => item.id === id);
     setPresetId(id);
-    setRequestText(next ? (next.request.messages[0]?.content.toString() ?? "") : "");
+    setRequestText(next ? messageContentToText(next.request.messages[0]?.content) : "");
     setDecision(null);
   };
   const shareScenario = (): void => {
