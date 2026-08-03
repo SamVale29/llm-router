@@ -79,7 +79,7 @@ async function init(): Promise<void> {
   );
   await writeFile(
     "README.local.md",
-    "# Local LLM Router\n\nRun `pnpm dlx @llm-router/cli decide request.json --policy policy.yaml` for a decision-only explanation.\n",
+    "# Local LLM Router\n\nRun `pnpm cli decide request.json --policy policy.yaml` for a decision-only explanation after building the repository.\n",
     "utf8",
   );
   process.stdout.write(

@@ -11,6 +11,15 @@ LLM Router is an explainable, policy-driven TypeScript router for choosing AI mo
 
 The demo does not call a provider and never asks for an API key. Its catalog uses clearly labeled illustrative values. Replace those values with observations from your own workload before production use.
 
+## Run locally
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Open http://127.0.0.1:5173/ for the interactive playground. The demo is decision-only: it does not need an API key and does not call a provider.
+
 ## Thirty-second example
 
 ```ts
@@ -107,11 +116,12 @@ Validate a file with:
 
 ```bash
 pnpm install
-pnpm exec llm-router validate policy.yaml
-pnpm exec llm-router decide request.json --policy policy.yaml
+pnpm build
+pnpm cli validate policy.yaml
+pnpm cli decide request.json --policy policy.yaml
 ```
 
-The CLI also supports init, explain, serve, replay, eval run, eval compare, catalog validate and doctor.
+The local CLI is exposed as `pnpm cli` after the build. It also supports init, explain, serve, replay, eval run, eval compare, catalog validate and doctor.
 
 ## Strategies
 
@@ -142,8 +152,8 @@ const comparisons = await router.shadow(request);
 Set executeShadowRequests only when real shadow calls are explicitly authorized. Replay reads anonymized JSONL traces and compares a candidate policy in decision-only mode. The evaluation package writes JSON, Markdown, HTML and CSV and reports quality, cost, latency, fallback and constraint metrics together.
 
 ```bash
-pnpm exec llm-router replay fixtures/traces/sample.jsonl --policy fixtures/policies/default.yaml
-pnpm exec llm-router eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml --output reports/eval
+pnpm cli replay fixtures/traces/sample.jsonl --policy fixtures/policies/default.yaml
+pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml --output reports/eval
 ```
 
 ## Local proxy
@@ -151,7 +161,7 @@ pnpm exec llm-router eval run --dataset fixtures/evals/tasks.jsonl --policy fixt
 The optional proxy is localhost-oriented and content logging is disabled by default:
 
 ```bash
-pnpm exec llm-router serve --policy policy.yaml --port 8787
+pnpm cli serve --policy policy.yaml --port 8787
 ```
 
 It exposes /v1/chat/completions, /v1/responses, /v1/router/decide, /v1/router/explain, /v1/router/models, /health and /ready. Configure an internal token before exposing it beyond localhost. Do not host a public unauthenticated proxy.
