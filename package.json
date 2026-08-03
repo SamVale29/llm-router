@@ -13,6 +13,7 @@
     "build": "pnpm --filter @llm-router/core --filter @llm-router/catalog --filter @llm-router/evals --filter @llm-router/observability --filter @llm-router/adapter-openai-compatible --filter @llm-router/adapter-openai --filter @llm-router/adapter-anthropic --filter @llm-router/adapter-google --filter @llm-router/adapter-openrouter --filter @llm-router/proxy --filter @llm-router/cli --filter @llm-router/testing run build && pnpm --filter @llm-router/playground run build",
     "clean": "pnpm -r exec node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "dev": "pnpm --filter @llm-router/playground dev",
+    "cli": "tsx packages/cli/src/index.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
@@ -27,7 +28,8 @@
     "catalog:check-sources": "tsx scripts/catalog.ts check-sources",
     "eval:demo": "tsx scripts/eval-demo.ts",
     "pack:check": "tsx scripts/pack-check.ts",
-    "release:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm catalog:validate && pnpm test && pnpm build && pnpm pack:check"
+    "test:cli": "pnpm cli validate fixtures/policies/default.yaml && pnpm cli doctor --policy fixtures/policies/default.yaml",
+    "release:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm catalog:validate && pnpm test && pnpm build && pnpm test:cli && pnpm pack:check"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",

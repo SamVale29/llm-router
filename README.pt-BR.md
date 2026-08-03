@@ -8,6 +8,15 @@ LLM Router é uma biblioteca TypeScript de roteamento orientada por políticas p
 
 O playground não chama providers e não pede API key. Os preços e scores do catálogo de demonstração são explicitamente ilustrativos. Substitua-os por observações do seu workload antes de produção.
 
+## Executar localmente
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Abra http://127.0.0.1:5173/ para acessar o playground interativo. O demo é decision-only: não precisa de API key e não chama providers.
+
 ## Exemplo rápido
 
 ```ts
@@ -52,11 +61,14 @@ O core não lê variáveis de ambiente e não faz chamadas de rede em decision-o
 
 ```bash
 pnpm install
-pnpm exec llm-router init
-pnpm exec llm-router decide request.json --policy policy.yaml
-pnpm exec llm-router explain request.json --policy policy.yaml
-pnpm exec llm-router eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml
+pnpm build
+pnpm cli init
+pnpm cli decide request.json --policy policy.yaml
+pnpm cli explain request.json --policy policy.yaml
+pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml
 ```
+
+O CLI local é executado com `pnpm cli` depois do build.
 
 Leia a documentação em [docs/](docs/architecture.md), [SECURITY.md](SECURITY.md) e [CONTRIBUTING.md](CONTRIBUTING.md).
 
