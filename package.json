@@ -10,8 +10,9 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @llm-router/core --filter @llm-router/catalog --filter @llm-router/evals --filter @llm-router/observability --filter @llm-router/adapter-openai-compatible --filter @llm-router/adapter-openai --filter @llm-router/adapter-anthropic --filter @llm-router/adapter-google --filter @llm-router/adapter-openrouter --filter @llm-router/proxy --filter @llm-router/cli --filter @llm-router/testing run build && pnpm --filter @llm-router/playground run build",
-    "clean": "pnpm -r exec node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prebuild": "pnpm clean",
+    "build": "pnpm --filter @llm-router/core run build && pnpm --filter @llm-router/catalog run build && pnpm --filter @llm-router/evals run build && pnpm --filter @llm-router/observability run build && pnpm --filter @llm-router/adapter-openai-compatible run build && pnpm --filter @llm-router/adapter-openai run build && pnpm --filter @llm-router/adapter-anthropic run build && pnpm --filter @llm-router/adapter-google run build && pnpm --filter @llm-router/adapter-openrouter run build && pnpm --filter @llm-router/proxy run build && pnpm --filter @llm-router/cli run build && pnpm --filter @llm-router/testing run build && pnpm --filter @llm-router/playground run build",
+    "clean": "pnpm -r exec node -e \"const fs=require('fs'); for (const path of ['dist','tsconfig.tsbuildinfo','tsconfig.check.tsbuildinfo']) fs.rmSync(path,{recursive:true,force:true})\"",
     "dev": "pnpm --filter @llm-router/playground dev",
     "cli": "tsx packages/cli/src/index.ts",
     "format": "prettier --write .",
@@ -19,6 +20,7 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.check.json --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "pnpm build && playwright test",
     "test:e2e:ci": "playwright test",
@@ -28,24 +30,32 @@
     "catalog:check-sources": "tsx scripts/catalog.ts check-sources",
     "eval:demo": "tsx scripts/eval-demo.ts",
     "pack:check": "tsx scripts/pack-check.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish",
     "test:cli": "pnpm cli validate fixtures/policies/default.yaml && pnpm cli doctor --policy fixtures/policies/default.yaml",
-    "release:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm catalog:validate && pnpm test && pnpm build && pnpm test:cli && pnpm pack:check"
+    "release:check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm catalog:validate && pnpm test && pnpm test:coverage && pnpm build && pnpm test:cli && pnpm pack:check"
   },
   "devDependencies": {
-    "@playwright/test": "^1.54.2",
+    "@changesets/cli": "^2.31.1",
     "@eslint/js": "^9.27.0",
+    "@playwright/test": "^1.54.2",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.15.21",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^9.27.0",
     "eslint-import-resolver-typescript": "^4.3.5",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "express": "^5.2.1",
+    "fastify": "^5.11.2",
     "prettier": "^3.5.3",
     "tsx": "^4.19.4",
-    "typescript-eslint": "^8.32.0",
     "typescript": "^5.8.3",
+    "typescript-eslint": "^8.32.0",
     "vitest": "^3.1.4"
   }
 }

@@ -56,6 +56,16 @@ export interface RouterMessage {
   toolCallId?: string;
 }
 
+export interface TokenEstimationOptions {
+  nonTextPartTokens?: number;
+}
+
+export interface InputTokenEstimate {
+  source: "explicit" | "configured" | "default";
+  nonTextParts: number;
+  nonTextPartTokens: number;
+}
+
 export interface RouterTool {
   name: string;
   description?: string;
@@ -190,6 +200,7 @@ export interface NormalizedRoutingRequest extends RoutingRequest {
   constraints: RoutingConstraints;
   detectedModalities: Modality[];
   estimatedInputTokens: number;
+  inputTokenEstimate?: InputTokenEstimate;
 }
 
 export interface EliminationReason {
@@ -380,6 +391,7 @@ export interface HealthStore {
 export interface BudgetScope {
   type: "request" | "user" | "project" | "period";
   id: string;
+  periodStart?: string;
 }
 
 export interface BudgetUsage {
@@ -534,6 +546,7 @@ export interface RouterHooks {
   beforeSelect?: (context: RouterHookContext) => void | Promise<void>;
   afterSelect?: (context: RouterHookContext) => void | Promise<void>;
   beforeExecute?: (context: RouterHookContext) => void | Promise<void>;
+  onAttemptStart?: (context: RouterHookContext) => void | Promise<void>;
   afterExecute?: (context: RouterHookContext) => void | Promise<void>;
   onAttemptError?: (context: RouterHookContext) => void | Promise<void>;
   onFallback?: (context: RouterHookContext) => void | Promise<void>;
@@ -550,6 +563,7 @@ export interface RouterOptions {
   libraryVersion?: string;
   now?: () => Date;
   random?: () => number;
+  tokenEstimation?: TokenEstimationOptions;
   hooks?: RouterHooks;
   customStrategies?: RoutingStrategy[];
   executeShadowRequests?: boolean;
