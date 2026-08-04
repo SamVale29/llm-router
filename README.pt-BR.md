@@ -63,9 +63,10 @@ O core não lê variáveis de ambiente e não faz chamadas de rede em decision-o
 pnpm install
 pnpm build
 pnpm cli init
-pnpm cli decide request.json --policy policy.yaml
-pnpm cli explain request.json --policy policy.yaml
-pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml
+pnpm cli decide request.json --policy policy.yaml --catalog catalog.json
+pnpm cli explain request.json --policy policy.yaml --catalog catalog.json
+pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml --catalog fixtures/catalogs/default.json
+pnpm test:coverage
 ```
 
 O CLI local é executado com `pnpm cli` depois do build.
@@ -75,3 +76,5 @@ Leia a documentação em [docs/](docs/architecture.md), [SECURITY.md](SECURITY.m
 ## Licença
 
 Apache License 2.0.
+
+IntegraÃ§Ãµes de Express, Next.js e Fastify estÃ£o em [examples/README.md](examples/README.md). A validaÃ§Ã£o de catÃ¡logo Ã© somente leitura; use `pnpm cli catalog build --output schemas` para gerar schemas.

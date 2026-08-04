@@ -1,9 +1,15 @@
-import { normalizedErrorFromUnknown, sanitizeMessage } from "@llm-router/core";
+import {
+  httpError,
+  isHttpAdapterError,
+  isPrivateOrReservedHost,
+  normalizedErrorFromUnknown,
+} from "@llm-router/core";
 import type {
   AdapterResponse,
   AdapterStreamEvent,
   ExecutionContext,
   ModelDefinition,
+  MessagePart,
   NormalizedRoutingRequest,
   ProviderAdapter,
   RouterMessage,
@@ -31,10 +37,11 @@ export function createOpenAICompatibleAdapter(
     async execute(request, model, context) {
       const response = await fetchImpl(`${endpoint}/chat/completions`, {
         method: "POST",
+        redirect: "manual",
         headers: {
+          ...(options.headers ?? {}),
           "content-type": "application/json",
           ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-          ...(options.headers ?? {}),
         },
         body: JSON.stringify(toChatPayload(request, model, context)),
         signal: context.signal,
@@ -44,39 +51,51 @@ export function createOpenAICompatibleAdapter(
     async *stream(request, model, context): AsyncIterable<AdapterStreamEvent> {
       const response = await fetchImpl(`${endpoint}/chat/completions`, {
         method: "POST",
+        redirect: "manual",
         headers: {
+          ...(options.headers ?? {}),
           "content-type": "application/json",
           ...(options.apiKey ? { authorization: `Bearer ${options.apiKey}` } : {}),
-          ...(options.headers ?? {}),
         },
         body: JSON.stringify({ ...toChatPayload(request, model, context), stream: true }),
         signal: context.signal,
       });
-      if (!response.ok) throw await httpError(response);
+      rejectRedirect(response);
+      if (!response.ok) throw await httpError(response, model.providerId);
       if (!response.body) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          const payload = line.trim().replace(/^data:\s*/, "");
-          if (!payload || payload === "[DONE]") continue;
-          const parsed: unknown = JSON.parse(payload);
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          buffer += decoder.decode(chunk.value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            const payload = parseSseData(line);
+            if (payload === undefined || payload === "[DONE]") continue;
+            const parsed = parseSseJson(payload);
+            const delta = getPath(parsed, ["choices", 0, "delta", "content"]);
+            if (typeof delta === "string") yield { type: "text-delta", text: delta };
+            const usage = getPath(parsed, ["usage"]);
+            if (usage && typeof usage === "object")
+              yield { type: "usage", usage: normalizeUsage(usage) };
+          }
+        }
+        const payload = parseSseData(buffer);
+        if (payload !== undefined && payload !== "[DONE]") {
+          const parsed = parseSseJson(payload);
           const delta = getPath(parsed, ["choices", 0, "delta", "content"]);
           if (typeof delta === "string") yield { type: "text-delta", text: delta };
-          const usage = getPath(parsed, ["usage"]);
-          if (usage && typeof usage === "object")
-            yield { type: "usage", usage: normalizeUsage(usage) };
         }
+      } finally {
+        reader.releaseLock();
       }
     },
     normalizeError(error) {
-      if (isHttpError(error))
+      if (isHttpAdapterError(error))
         return normalizedErrorFromUnknown(error, {
           code: error.code,
           statusCode: error.statusCode,
@@ -92,11 +111,19 @@ export function createOpenAICompatibleAdapter(
 
 export function validateEndpoint(endpoint: string, allowHosts?: string[]): string {
   const url = new URL(endpoint);
-  if (!["https:", "http:"].includes(url.protocol))
-    throw new Error("Adapter endpoint must use HTTP or HTTPS.");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalHost(url.hostname)))
+    throw new Error("Adapter endpoint must use HTTPS; HTTP is allowed only for localhost.");
   if (allowHosts && !allowHosts.includes(url.hostname))
     throw new Error(`Adapter endpoint host ${url.hostname} is not in the allowlist.`);
+  if (!allowHosts && !isLocalHost(url.hostname) && isPrivateOrReservedHost(url.hostname))
+    throw new Error(
+      "Adapter endpoint cannot target a private or reserved network host without allowHosts.",
+    );
   return endpoint.replace(/\/$/, "");
+}
+
+function isLocalHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function toChatPayload(
@@ -105,6 +132,7 @@ function toChatPayload(
   context: ExecutionContext,
 ): Record<string, unknown> {
   return {
+    ...(request.providerOptions?.compatible ?? {}),
     model: model.apiModelId,
     messages: request.messages.map(toMessage),
     ...(request.output?.maxTokens ? { max_tokens: request.output.maxTokens } : {}),
@@ -134,7 +162,6 @@ function toChatPayload(
         }
       : {}),
     ...(request.hints?.latency === "realtime" ? { stream_options: { include_usage: true } } : {}),
-    ...(request.providerOptions?.compatible ?? {}),
     request_id: context.requestId,
   };
 }
@@ -144,23 +171,38 @@ function toMessage(message: RouterMessage): Record<string, unknown> {
     role: message.role,
     ...(message.name ? { name: message.name } : {}),
     ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
-    content:
-      typeof message.content === "string"
-        ? message.content
-        : message.content.map((part) =>
-            part.type === "text"
-              ? { type: "text", text: part.text }
-              : {
-                  type: part.type === "image" ? "image_url" : part.type,
-                  [part.type === "image" ? "image_url" : "source"]:
-                    part.source.type === "url" ? { url: part.source.value } : part.source.value,
-                },
-          ),
+    content: typeof message.content === "string" ? message.content : message.content.map(toPart),
+  };
+}
+
+function toPart(part: MessagePart): Record<string, unknown> {
+  if (part.type === "text") return { type: "text", text: part.text };
+  if (part.type === "image")
+    return {
+      type: "image_url",
+      image_url: {
+        url:
+          part.source.type === "url"
+            ? part.source.value
+            : `data:${part.source.mediaType ?? "application/octet-stream"};base64,${part.source.value}`,
+      },
+    };
+  return {
+    type: part.type,
+    source:
+      part.source.type === "url"
+        ? { url: part.source.value }
+        : {
+            type: "base64",
+            media_type: part.source.mediaType ?? "application/octet-stream",
+            data: part.source.value,
+          },
   };
 }
 
 async function parseResponse(response: Response, model: ModelDefinition): Promise<AdapterResponse> {
-  if (!response.ok) throw await httpError(response);
+  rejectRedirect(response);
+  if (!response.ok) throw await httpError(response, model.providerId);
   const body: unknown = await response.json();
   const text = getPath(body, ["choices", 0, "message", "content"]);
   const message = getPath(body, ["choices", 0, "message"]);
@@ -171,6 +213,11 @@ async function parseResponse(response: Response, model: ModelDefinition): Promis
     ...(usage && typeof usage === "object" ? { usage: normalizeUsage(usage) } : {}),
     raw: { provider: model.providerId, hasContent: typeof text === "string" },
   };
+}
+
+function rejectRedirect(response: Response): void {
+  if (response.status >= 300 && response.status < 400)
+    throw new Error("Provider endpoint redirect rejected.");
 }
 
 function normalizeUsage(value: object): {
@@ -189,70 +236,20 @@ function normalizeUsage(value: object): {
   };
 }
 
-class HttpAdapterError extends Error {
-  readonly code:
-    | "authentication"
-    | "permission"
-    | "rate-limit"
-    | "quota"
-    | "timeout"
-    | "unavailable"
-    | "invalid-request"
-    | "context-length"
-    | "content-filter"
-    | "connection"
-    | "unknown";
-  readonly statusCode: number;
-  readonly retryAfterMs?: number;
-  constructor(
-    code: HttpAdapterError["code"],
-    statusCode: number,
-    message: string,
-    retryAfterMs?: number,
-  ) {
-    super(sanitizeMessage(message));
-    this.name = "HttpAdapterError";
-    this.code = code;
-    this.statusCode = statusCode;
-    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
-  }
+function parseSseData(line: string): string | undefined {
+  const trimmed = line.trimEnd();
+  if (!trimmed || trimmed.startsWith(":") || !trimmed.startsWith("data:")) return undefined;
+  return trimmed.slice("data:".length).trimStart();
 }
 
-async function httpError(response: Response): Promise<HttpAdapterError> {
-  let message = `Provider returned HTTP ${response.status}.`;
+function parseSseJson(payload: string): unknown {
   try {
-    const body: unknown = await response.json();
-    const candidate = getPath(body, ["error", "message"]);
-    if (typeof candidate === "string") message = candidate;
+    return JSON.parse(payload) as unknown;
   } catch {
-    /* body may not be JSON */
+    throw new Error("Provider returned malformed SSE data.");
   }
-  const code =
-    response.status === 401
-      ? "authentication"
-      : response.status === 403
-        ? "permission"
-        : response.status === 429
-          ? "rate-limit"
-          : response.status === 408
-            ? "timeout"
-            : response.status === 400
-              ? "invalid-request"
-              : response.status >= 500
-                ? "unavailable"
-                : "unknown";
-  const retryAfter = response.headers.get("retry-after");
-  return new HttpAdapterError(
-    code,
-    response.status,
-    message,
-    retryAfter ? Number(retryAfter) * 1_000 : undefined,
-  );
 }
 
-function isHttpError(error: unknown): error is HttpAdapterError {
-  return error instanceof HttpAdapterError;
-}
 function getPath(value: unknown, path: Array<string | number>): unknown {
   let current = value;
   for (const key of path) {

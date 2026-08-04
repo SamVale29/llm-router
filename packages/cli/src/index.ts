@@ -2,11 +2,18 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { demoCatalog, catalogJsonSchema, validateCatalog } from "@llm-router/catalog";
+import { catalogJsonSchema, demoCatalog, validateCatalog } from "@llm-router/catalog";
+import { createAnthropicAdapter } from "@llm-router/adapter-anthropic";
+import { createGoogleAdapter } from "@llm-router/adapter-google";
+import { createOpenAIAdapter } from "@llm-router/adapter-openai";
+import { createOpenRouterAdapter } from "@llm-router/adapter-openrouter";
+import { createOpenAICompatibleAdapter } from "@llm-router/adapter-openai-compatible";
 import {
   createRouter,
   parsePolicyYaml,
   policyJsonSchema,
+  type Catalog,
+  type ProviderAdapter,
   type RoutingPolicy,
   type RoutingRequest,
 } from "@llm-router/core";
@@ -28,16 +35,17 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, subcommand, ...rest] = argv;
   const commandArgs = subcommand ? [subcommand, ...rest] : rest;
   try {
-    if (command === "init") return init();
-    if (command === "validate") return validate(subcommand ?? rest[0] ?? "policy.yaml");
+    if (command === "init") return await init();
+    if (command === "validate") return await validate(commandArgs);
     if (command === "decide" || command === "explain")
-      return decide(commandArgs, command === "explain");
-    if (command === "serve") return serve(commandArgs);
-    if (command === "replay") return replay(commandArgs);
-    if (command === "eval" && subcommand === "run") return evalRun(rest);
-    if (command === "eval" && subcommand === "compare") return evalCompare(rest);
-    if (command === "catalog" && subcommand === "validate") return catalogValidate();
-    if (command === "doctor") return doctor(commandArgs);
+      return await decide(commandArgs, command === "explain");
+    if (command === "serve") return await serve(commandArgs);
+    if (command === "replay") return await replay(commandArgs);
+    if (command === "eval" && subcommand === "run") return await evalRun(rest);
+    if (command === "eval" && subcommand === "compare") return await evalCompare(rest);
+    if (command === "catalog" && subcommand === "validate") return await catalogValidate(rest);
+    if (command === "catalog" && subcommand === "build") return await catalogBuild(rest);
+    if (command === "doctor") return await doctor(commandArgs);
     printHelp();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -87,32 +95,38 @@ async function init(): Promise<void> {
   );
 }
 
-async function validate(policyPath: string): Promise<void> {
-  const policy = await loadPolicy(policyPath);
+async function validate(args: string[]): Promise<void> {
+  const policyPath = args[0] ?? "policy.yaml";
+  const policy = await loadPolicy(policyPath, await loadCatalog(valueAfter(args, "--catalog")));
   process.stdout.write(`Policy ${policyPath} is valid (version ${policy.version}).\n`);
 }
 
 async function decide(args: string[], explain: boolean): Promise<void> {
   const requestPath = args[0];
   const policyPath = valueAfter(args, "--policy") ?? "policy.yaml";
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
   if (!requestPath) throw new Error("Usage: llm-router decide request.json --policy policy.yaml");
   const request = JSON.parse(await readFile(resolve(requestPath), "utf8")) as RoutingRequest;
-  const policy = await loadPolicy(policyPath);
-  const router = createRouter({ catalog: demoCatalog, policy });
+  const policy = await loadPolicy(policyPath, catalog);
+  const router = createRouter({ catalog, policy });
   const decision = explain ? await router.explain(request) : await router.decide(request);
   process.stdout.write(`${JSON.stringify(decision, null, 2)}\n`);
 }
 
 async function serve(args: string[]): Promise<void> {
   const policyPath = valueAfter(args, "--policy") ?? "policy.yaml";
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
   const port = Number(valueAfter(args, "--port") ?? 8787);
-  const policy = await loadPolicy(policyPath);
-  const router = createRouter({ catalog: demoCatalog, policy });
+  const policy = await loadPolicy(policyPath, catalog);
+  const adapters = configuredAdapters(catalog);
+  const router = createRouter({ catalog, policy, adapters });
   const proxy = createProxyServer({
     router,
-    catalog: demoCatalog,
+    catalog,
     port,
     authToken: process.env.LLM_ROUTER_PROXY_TOKEN,
+    enableCompletions: Object.keys(adapters).length > 0,
+    exposeModels: args.includes("--expose-models"),
   });
   process.stdout.write(
     `LLM Router proxy listening at ${proxy.url}. Content logging is disabled.\n`,
@@ -123,10 +137,11 @@ async function serve(args: string[]): Promise<void> {
 async function replay(args: string[]): Promise<void> {
   const tracePath = args[0];
   const policyPath = valueAfter(args, "--policy") ?? "policy.yaml";
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
   if (!tracePath) throw new Error("Usage: llm-router replay traces.jsonl --policy policy.yaml");
   const traces = parseJsonl(await readFile(resolve(tracePath), "utf8")) as ReplayTrace[];
-  const policy = await loadPolicy(policyPath);
-  const report = await replayTraces(createRouter({ catalog: demoCatalog, policy }), policy, traces);
+  const policy = await loadPolicy(policyPath, catalog);
+  const report = await replayTraces(createRouter({ catalog, policy }), policy, traces);
   const output = valueAfter(args, "--output") ?? "replay-report.json";
   await writeFile(resolve(output), JSON.stringify(report, null, 2), "utf8");
   process.stdout.write(`Replay report written to ${output}.\n`);
@@ -135,12 +150,13 @@ async function replay(args: string[]): Promise<void> {
 async function evalRun(args: string[]): Promise<void> {
   const datasetPath = valueAfter(args, "--dataset");
   const policyPath = valueAfter(args, "--policy") ?? "policy.yaml";
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
   if (!datasetPath)
     throw new Error("Usage: llm-router eval run --dataset tasks.jsonl --policy policy.yaml");
-  const policy = await loadPolicy(policyPath);
+  const policy = await loadPolicy(policyPath, catalog);
   const dataset = parseJsonl(await readFile(resolve(datasetPath), "utf8")) as EvalItem[];
   const report = await evaluateDataset({
-    router: createRouter({ catalog: demoCatalog, policy }),
+    router: createRouter({ catalog, policy }),
     dataset,
     policy,
   });
@@ -164,16 +180,32 @@ async function evalCompare(args: string[]): Promise<void> {
   if (!comparison.passed) process.exitCode = 2;
 }
 
-async function catalogValidate(): Promise<void> {
-  const issues = validateCatalog(demoCatalog);
+async function catalogValidate(args: string[]): Promise<void> {
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
+  const issues = validateCatalog(catalog);
   if (issues.length) throw new Error(JSON.stringify(issues, null, 2));
-  await writeFile("catalog.schema.json", JSON.stringify(catalogJsonSchema(), null, 2), "utf8");
-  await writeFile("policy.schema.json", JSON.stringify(policyJsonSchema(), null, 2), "utf8");
-  process.stdout.write("Demo catalog is valid.\n");
+  process.stdout.write("Catalog is valid.\n");
+}
+
+async function catalogBuild(args: string[]): Promise<void> {
+  const output = valueAfter(args, "--output") ?? ".";
+  await mkdir(resolve(output), { recursive: true });
+  await writeFile(
+    resolve(output, "catalog.schema.json"),
+    JSON.stringify(catalogJsonSchema(), null, 2),
+    "utf8",
+  );
+  await writeFile(
+    resolve(output, "policy.schema.json"),
+    JSON.stringify(policyJsonSchema(), null, 2),
+    "utf8",
+  );
+  process.stdout.write(`Schemas written to ${output}.\n`);
 }
 
 async function doctor(args: string[]): Promise<void> {
   const policyPath = valueAfter(args, "--policy");
+  const catalog = await loadCatalog(valueAfter(args, "--catalog"));
   const checks = [
     {
       name: "node",
@@ -182,8 +214,8 @@ async function doctor(args: string[]): Promise<void> {
     },
     {
       name: "catalog",
-      ok: validateCatalog(demoCatalog).length === 0,
-      detail: `${demoCatalog.models.length} models`,
+      ok: validateCatalog(catalog).length === 0,
+      detail: `${catalog.models.length} models`,
     },
     {
       name: "openai key configured",
@@ -198,7 +230,7 @@ async function doctor(args: string[]): Promise<void> {
   ];
   if (policyPath) {
     try {
-      await loadPolicy(policyPath);
+      await loadPolicy(policyPath, catalog);
       checks.push({ name: "policy", ok: true, detail: policyPath });
     } catch {
       checks.push({ name: "policy", ok: false, detail: policyPath });
@@ -207,10 +239,50 @@ async function doctor(args: string[]): Promise<void> {
   process.stdout.write(
     `${checks.map((check) => `${check.ok ? "OK" : "WARN"} ${check.name}: ${check.detail}`).join("\n")}\n`,
   );
+  if (
+    checks.some(
+      (check) =>
+        !check.ok &&
+        check.name !== "openai key configured" &&
+        check.name !== "anthropic key configured",
+    )
+  )
+    process.exitCode = 1;
 }
 
-async function loadPolicy(path: string): Promise<RoutingPolicy> {
-  return parsePolicyYaml(await readFile(resolve(path), "utf8"), demoCatalog);
+async function loadPolicy(path: string, catalog: Catalog = demoCatalog): Promise<RoutingPolicy> {
+  return parsePolicyYaml(await readFile(resolve(path), "utf8"), catalog);
+}
+async function loadCatalog(path?: string): Promise<Catalog> {
+  if (!path) return demoCatalog;
+  const catalog = JSON.parse(await readFile(resolve(path), "utf8")) as Catalog;
+  const issues = validateCatalog(catalog);
+  if (issues.length) throw new Error(JSON.stringify(issues, null, 2));
+  return catalog;
+}
+
+function configuredAdapters(catalog: Catalog): Record<string, ProviderAdapter> {
+  const adapters: Record<string, ProviderAdapter> = {};
+  for (const provider of catalog.providers) {
+    if (provider.adapter === "openai" && process.env.OPENAI_API_KEY)
+      adapters[provider.adapter] = createOpenAIAdapter({ apiKey: process.env.OPENAI_API_KEY });
+    if (provider.adapter === "openrouter" && process.env.OPENROUTER_API_KEY)
+      adapters[provider.adapter] = createOpenRouterAdapter({
+        apiKey: process.env.OPENROUTER_API_KEY,
+      });
+    if (provider.adapter === "anthropic" && process.env.ANTHROPIC_API_KEY)
+      adapters[provider.adapter] = createAnthropicAdapter({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+      });
+    if (provider.adapter === "google" && process.env.GOOGLE_API_KEY)
+      adapters[provider.adapter] = createGoogleAdapter({ apiKey: process.env.GOOGLE_API_KEY });
+    if (provider.adapter === "openai-compatible" && process.env.OPENAI_COMPATIBLE_ENDPOINT)
+      adapters[provider.adapter] = createOpenAICompatibleAdapter({
+        endpoint: process.env.OPENAI_COMPATIBLE_ENDPOINT,
+        apiKey: process.env.OPENAI_COMPATIBLE_API_KEY,
+      });
+  }
+  return adapters;
 }
 function valueAfter(args: string[], flag: string): string | undefined {
   const index = args.indexOf(flag);
@@ -218,7 +290,7 @@ function valueAfter(args: string[], flag: string): string | undefined {
 }
 function printHelp(): void {
   process.stdout.write(
-    "LLM Router CLI\n\nCommands: init | validate | decide | explain | serve | replay | eval run | eval compare | catalog validate | doctor\n",
+    "LLM Router CLI\n\nCommands: init | validate | decide | explain | serve | replay | eval run | eval compare | catalog validate | catalog build | doctor\n",
   );
 }
 

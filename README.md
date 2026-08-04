@@ -117,11 +117,11 @@ Validate a file with:
 ```bash
 pnpm install
 pnpm build
-pnpm cli validate policy.yaml
-pnpm cli decide request.json --policy policy.yaml
+pnpm cli validate policy.yaml --catalog catalog.json
+pnpm cli decide request.json --policy policy.yaml --catalog catalog.json
 ```
 
-The local CLI is exposed as `pnpm cli` after the build. It also supports init, explain, serve, replay, eval run, eval compare, catalog validate and doctor.
+The local CLI is exposed as `pnpm cli` after the build. It also supports init, explain, serve, replay, eval run, eval compare, catalog validate, catalog build and doctor. Commands use the demo catalog unless `--catalog catalog.json` is supplied.
 
 ## Strategies
 
@@ -139,7 +139,7 @@ The repository contains functional adapters for:
 - OpenRouter;
 - generic OpenAI-compatible endpoints.
 
-Provider credentials are passed directly to an adapter by application code. Namespaced providerOptions preserve provider-specific features. Adapter contract tests use a simulated fetch and never call paid APIs in CI.
+Provider credentials are passed directly to an adapter by application code. Namespaced providerOptions preserve provider-specific features. Adapter contract tests use a simulated fetch and never call paid APIs in CI. The shared HTTP error contract preserves status and `Retry-After` across providers; streaming parsers ignore SSE comments and provider event fields.
 
 ## Shadow, replay and evaluation
 
@@ -152,8 +152,8 @@ const comparisons = await router.shadow(request);
 Set executeShadowRequests only when real shadow calls are explicitly authorized. Replay reads anonymized JSONL traces and compares a candidate policy in decision-only mode. The evaluation package writes JSON, Markdown, HTML and CSV and reports quality, cost, latency, fallback and constraint metrics together.
 
 ```bash
-pnpm cli replay fixtures/traces/sample.jsonl --policy fixtures/policies/default.yaml
-pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml --output reports/eval
+pnpm cli replay fixtures/traces/sample.jsonl --policy fixtures/policies/default.yaml --catalog fixtures/catalogs/default.json
+pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policies/default.yaml --catalog fixtures/catalogs/default.json --output reports/eval
 ```
 
 ## Local proxy
@@ -161,12 +161,14 @@ pnpm cli eval run --dataset fixtures/evals/tasks.jsonl --policy fixtures/policie
 The optional proxy is localhost-oriented and content logging is disabled by default:
 
 ```bash
-pnpm cli serve --policy policy.yaml --port 8787
+LLM_ROUTER_PROXY_TOKEN=local-development-token pnpm cli serve --policy policy.yaml --catalog catalog.json --port 8787
 ```
 
-It exposes /v1/chat/completions, /v1/responses, /v1/router/decide, /v1/router/explain, /v1/router/models, /health and /ready. Configure an internal token before exposing it beyond localhost. Do not host a public unauthenticated proxy.
+The CLI registers provider adapters only when their credentials/configuration are supplied (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY` or `OPENAI_COMPATIBLE_ENDPOINT`). Without an adapter, completion endpoints return a clear `501` instead of a misleading provider `500`. The model list is hidden by default. Configure an internal token and explicit CORS allowlist before exposing it beyond localhost. Do not host a public unauthenticated proxy.
 
 ## Packages
+
+Runnable framework integrations and their deterministic mock behavior are listed in [examples/README.md](examples/README.md).
 
 - @llm-router/core — typed contracts, normalization, constraints, strategies, resilience and explainability.
 - @llm-router/catalog — versioned providers, models and source metadata.
@@ -185,6 +187,7 @@ pnpm lint
 pnpm typecheck
 pnpm catalog:validate
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm test:e2e
 pnpm pack:check

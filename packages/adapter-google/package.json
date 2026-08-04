@@ -2,7 +2,27 @@
   "name": "@llm-router/adapter-google",
   "version": "0.1.0",
   "description": "Google Gemini generateContent adapter for LLM Router.",
+  "author": "Sam Vale <samvale29@users.noreply.github.com>",
+  "keywords": [
+    "llm",
+    "ai",
+    "model-routing",
+    "typescript",
+    "google-gemini"
+  ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SamVale29/llm-router.git",
+    "directory": "packages/adapter-google"
+  },
+  "homepage": "https://github.com/SamVale29/llm-router#readme",
+  "bugs": {
+    "url": "https://github.com/SamVale29/llm-router/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "exports": {
     ".": {

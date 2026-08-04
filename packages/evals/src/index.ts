@@ -265,6 +265,7 @@ export function renderEvalCsv(report: EvalReport): string {
 export function compareReports(
   baseline: EvalReport,
   candidate: EvalReport,
+  configuredGates: NonNullable<RoutingPolicy["evaluation"]>["gates"] = {},
 ): {
   costDelta: number | null;
   qualityDelta: number | null;
@@ -281,11 +282,12 @@ export function compareReports(
     (candidate.summary.qualityDeltaVsBaseline ?? 0) -
     (baseline.summary.qualityDeltaVsBaseline ?? 0);
   const p95LatencyDelta = ratio(candidate.summary.p95LatencyMs, baseline.summary.p95LatencyMs);
-  const gates = {
+  const gates: Required<NonNullable<RoutingPolicy["evaluation"]>["gates"]> = {
     maxQualityDrop: 0.01,
     minCostReduction: 0,
     maxConstraintViolations: 0,
     maxP95LatencyIncrease: 0.05,
+    ...configuredGates,
   };
   if (qualityDelta < -gates.maxQualityDrop) failures.push("quality drop exceeded gate");
   if (costDelta !== null && -costDelta < gates.minCostReduction)
@@ -303,7 +305,7 @@ function percentile(values: number[], fraction: number): number | null {
     : null;
 }
 function average(values: number[]): number {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 function ratio(value: number | null, baseline: number | null): number | null {
   return value === null || baseline === null || baseline === 0
@@ -317,9 +319,15 @@ function formatPercent(value: number | null): string {
   return value === null ? "unknown" : `${(value * 100).toFixed(2)}%`;
 }
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 function csv(value: unknown): string {
-  const text = String(value);
+  const raw = String(value);
+  const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }

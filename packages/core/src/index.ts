@@ -3,6 +3,7 @@ export * from "./errors.js";
 export * from "./normalize.js";
 export * from "./tasks.js";
 export * from "./cost.js";
+export * from "./endpoint.js";
 export * from "./compatibility.js";
 export * from "./health.js";
 export * from "./policy.js";

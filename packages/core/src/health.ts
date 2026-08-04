@@ -113,5 +113,5 @@ export function createInMemoryBudgetStore(): BudgetStore {
 }
 
 function scopeKey(scope: BudgetScope): string {
-  return `${scope.type}:${scope.id}`;
+  return `${scope.type}:${scope.id}:${scope.periodStart ?? "unbounded"}`;
 }
