@@ -1,4 +1,9 @@
-import { normalizedErrorFromUnknown, sanitizeMessage } from "@llm-router/core";
+import {
+  httpError,
+  isHttpAdapterError,
+  isPrivateOrReservedHost,
+  normalizedErrorFromUnknown,
+} from "@llm-router/core";
 import type { NormalizedRoutingRequest, ProviderAdapter, RouterMessage } from "@llm-router/core";
 
 export interface GoogleAdapterOptions {
@@ -17,28 +22,62 @@ export function createGoogleAdapter(options: GoogleAdapterOptions): ProviderAdap
       if (!model.apiModelId) throw new Error(`Model ${model.id} has no apiModelId.`);
     },
     async execute(request, model, context) {
-      const url = `${validateEndpoint(endpoint, options.allowHosts)}/models/${encodeURIComponent(model.apiModelId)}:generateContent${options.apiKey ? `?key=${encodeURIComponent(options.apiKey)}` : ""}`;
+      const url = `${validateEndpoint(endpoint, options.allowHosts)}/models/${encodeURIComponent(model.apiModelId)}:generateContent`;
       const response = await fetchImpl(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        redirect: "manual",
+        headers: {
+          "content-type": "application/json",
+          ...(options.apiKey ? { "x-goog-api-key": options.apiKey } : {}),
+        },
         body: JSON.stringify(toPayload(request)),
         signal: context.signal,
       });
-      if (!response.ok) throw await providerError(response);
+      rejectRedirect(response);
+      if (!response.ok) throw await httpError(response, "Google");
       const body: unknown = await response.json();
-      const text = getPath(body, ["candidates", 0, "content", "parts", 0, "text"]);
+      const parts = getPath(body, ["candidates", 0, "content", "parts"]);
+      const text = Array.isArray(parts)
+        ? parts
+            .filter((part) => typeof part.text === "string")
+            .map((part) => part.text)
+            .join("")
+        : undefined;
+      const toolCalls = Array.isArray(parts)
+        ? parts
+            .filter((part) => part.functionCall)
+            .map((part, index) => ({
+              callId: String(part.functionCall.id ?? `call-${index}`),
+              name: String(part.functionCall.name),
+              arguments: JSON.stringify(part.functionCall.args ?? {}),
+            }))
+        : [];
       const usage = getPath(body, ["usageMetadata"]);
       return {
         data: body,
+        toolCalls,
         ...(typeof text === "string" ? { text } : {}),
         ...(usage && typeof usage === "object" ? { usage: normalizeUsage(usage) } : {}),
         raw: { provider: model.providerId },
       };
     },
     normalizeError(error) {
+      if (isHttpAdapterError(error))
+        return normalizedErrorFromUnknown(error, {
+          code: error.code,
+          statusCode: error.statusCode,
+          retryAfterMs: error.retryAfterMs,
+          retryable: ["rate-limit", "timeout", "unavailable", "connection"].includes(error.code),
+          fallbackEligible: ["rate-limit", "timeout", "unavailable"].includes(error.code),
+        });
       return normalizedErrorFromUnknown(error);
     },
   };
+}
+
+function rejectRedirect(response: Response): void {
+  if (response.status >= 300 && response.status < 400)
+    throw new Error("Provider endpoint redirect rejected.");
 }
 
 function toPayload(request: NormalizedRoutingRequest): Record<string, unknown> {
@@ -51,29 +90,57 @@ function toPayload(request: NormalizedRoutingRequest): Record<string, unknown> {
     .map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts:
-        typeof message.content === "string"
-          ? [{ text: message.content }]
-          : message.content.map((part) =>
-              part.type === "text"
-                ? { text: part.text }
-                : part.source.type === "url"
-                  ? { fileData: { fileUri: part.source.value, mimeType: part.source.mediaType } }
-                  : {
-                      inlineData: {
-                        data: part.source.value,
-                        mimeType: part.source.mediaType ?? "application/octet-stream",
-                      },
-                    },
-            ),
+        message.role === "tool"
+          ? [
+              {
+                functionResponse: {
+                  name: message.name ?? message.toolCallId,
+                  response: { result: contentText(message) },
+                },
+              },
+            ]
+          : message.toolCalls?.length
+            ? message.toolCalls.map((call) => ({
+                functionCall: { name: call.name, args: JSON.parse(call.arguments) as unknown },
+              }))
+            : typeof message.content === "string"
+              ? [{ text: message.content }]
+              : message.content.map((part) =>
+                  part.type === "text"
+                    ? { text: part.text }
+                    : part.source.type === "url"
+                      ? {
+                          fileData: { fileUri: part.source.value, mimeType: part.source.mediaType },
+                        }
+                      : {
+                          inlineData: {
+                            data: part.source.value,
+                            mimeType: part.source.mediaType ?? "application/octet-stream",
+                          },
+                        },
+                ),
     }));
+  const providerOptions = { ...request.providerOptions?.google };
+  const generationOptions =
+    providerOptions.generationConfig && typeof providerOptions.generationConfig === "object"
+      ? (providerOptions.generationConfig as Record<string, unknown>)
+      : {};
+  for (const key of ["model", "contents", "systemInstruction", "tools", "generationConfig"])
+    delete providerOptions[key];
   return {
+    ...providerOptions,
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents,
-    ...(request.output.maxTokens
+    ...(request.output.maxTokens !== undefined ||
+    request.output.schema !== undefined ||
+    Object.keys(generationOptions).length > 0
       ? {
           generationConfig: {
-            maxOutputTokens: request.output.maxTokens,
-            ...(request.output.schema
+            ...generationOptions,
+            ...(request.output.maxTokens !== undefined
+              ? { maxOutputTokens: request.output.maxTokens }
+              : {}),
+            ...(request.output.schema !== undefined
               ? { responseMimeType: "application/json", responseSchema: request.output.schema }
               : {}),
           },
@@ -92,7 +159,6 @@ function toPayload(request: NormalizedRoutingRequest): Record<string, unknown> {
           ],
         }
       : {}),
-    ...(request.providerOptions?.google ?? {}),
   };
 }
 
@@ -115,24 +181,20 @@ function normalizeUsage(value: object): { inputTokens?: number; outputTokens?: n
       : {}),
   };
 }
-async function providerError(response: Response): Promise<Error> {
-  let message = `Google returned HTTP ${response.status}.`;
-  try {
-    const body: unknown = await response.json();
-    const candidate = getPath(body, ["error", "message"]);
-    if (typeof candidate === "string") message = candidate;
-  } catch {
-    /* ignore malformed error body */
-  }
-  return new Error(sanitizeMessage(message));
-}
 function validateEndpoint(endpoint: string, allowHosts?: string[]): string {
   const url = new URL(endpoint);
-  if (!["https:", "http:"].includes(url.protocol))
-    throw new Error("Adapter endpoint must use HTTP or HTTPS.");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalHost(url.hostname)))
+    throw new Error("Adapter endpoint must use HTTPS; HTTP is allowed only for localhost.");
   if (allowHosts && !allowHosts.includes(url.hostname))
     throw new Error(`Adapter endpoint host ${url.hostname} is not in the allowlist.`);
+  if (!allowHosts && !isLocalHost(url.hostname) && isPrivateOrReservedHost(url.hostname))
+    throw new Error(
+      "Adapter endpoint cannot target a private or reserved network host without allowHosts.",
+    );
   return endpoint.replace(/\/$/, "");
+}
+function isLocalHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 function getPath(value: unknown, path: Array<string | number>): unknown {
   let current = value;

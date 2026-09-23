@@ -97,21 +97,49 @@ function percentile(values: number[], fraction: number): number | undefined {
 
 export function createInMemoryBudgetStore(): BudgetStore {
   const usages = new Map<string, BudgetUsage>();
+  const reservations = new Map<string, UsageEntry>();
+  let sequence = 0;
+  const get = (scope: BudgetScope): BudgetUsage =>
+    usages.get(scopeKey(scope)) ?? { scope, amount: 0, currency: "USD" };
+  const record = (entry: UsageEntry): void => {
+    if (!Number.isFinite(entry.amount) || entry.amount < 0)
+      throw new Error("Invalid usage amount.");
+    const current = get(entry.scope);
+    usages.set(scopeKey(entry.scope), { ...current, amount: current.amount + entry.amount });
+  };
   return {
     async getUsage(scope) {
-      return usages.get(scopeKey(scope)) ?? { scope, amount: 0, currency: "USD" };
+      return { ...get(scope) };
     },
-    async recordUsage(entry: UsageEntry) {
-      const current = usages.get(scopeKey(entry.scope)) ?? {
-        scope: entry.scope,
-        amount: 0,
-        currency: "USD" as const,
-      };
-      usages.set(scopeKey(entry.scope), { ...current, amount: current.amount + entry.amount });
+    async recordUsage(entry) {
+      record(entry);
+    },
+    async reserve(entry, limit) {
+      if (
+        !Number.isFinite(entry.amount) ||
+        entry.amount < 0 ||
+        !Number.isFinite(limit) ||
+        limit < 0
+      )
+        throw new Error("Invalid budget reservation.");
+      const key = scopeKey(entry.scope);
+      const reserved = [...reservations.values()]
+        .filter((value) => scopeKey(value.scope) === key)
+        .reduce((sum, value) => sum + value.amount, 0);
+      if (get(entry.scope).amount + reserved + entry.amount > limit) return null;
+      const id = `reservation-${++sequence}`;
+      reservations.set(id, entry);
+      return id;
+    },
+    async settle(id, amount) {
+      const entry = reservations.get(id);
+      if (!entry) return;
+      record({ ...entry, amount });
+      reservations.delete(id);
     },
   };
 }
 
 function scopeKey(scope: BudgetScope): string {
-  return `${scope.type}:${scope.id}`;
+  return JSON.stringify([scope.type, scope.id, scope.periodStart ?? "unbounded"]);
 }

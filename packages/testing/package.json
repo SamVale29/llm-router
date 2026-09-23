@@ -2,7 +2,27 @@
   "name": "@llm-router/testing",
   "version": "0.1.0",
   "description": "Deterministic mock adapters and fixtures for LLM Router tests.",
+  "author": "Sam Vale <samvale29@users.noreply.github.com>",
+  "keywords": [
+    "llm",
+    "ai",
+    "testing",
+    "mock-adapter",
+    "typescript"
+  ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SamVale29/llm-router.git",
+    "directory": "packages/testing"
+  },
+  "homepage": "https://github.com/SamVale29/llm-router#readme",
+  "bugs": {
+    "url": "https://github.com/SamVale29/llm-router/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "exports": {
     ".": {

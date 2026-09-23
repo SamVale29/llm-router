@@ -2,7 +2,27 @@
   "name": "@llm-router/cli",
   "version": "0.1.0",
   "description": "CLI for policy validation, decisions, replay, evaluation and local proxy serving.",
+  "author": "Sam Vale <samvale29@users.noreply.github.com>",
+  "keywords": [
+    "llm",
+    "ai",
+    "model-routing",
+    "cli",
+    "typescript"
+  ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SamVale29/llm-router.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/SamVale29/llm-router#readme",
+  "bugs": {
+    "url": "https://github.com/SamVale29/llm-router/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "llm-router": "dist/index.js"
@@ -22,6 +42,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@llm-router/adapter-anthropic": "workspace:*",
+    "@llm-router/adapter-google": "workspace:*",
+    "@llm-router/adapter-openai": "workspace:*",
+    "@llm-router/adapter-openai-compatible": "workspace:*",
+    "@llm-router/adapter-openrouter": "workspace:*",
     "@llm-router/catalog": "workspace:*",
     "@llm-router/core": "workspace:*",
     "@llm-router/evals": "workspace:*",

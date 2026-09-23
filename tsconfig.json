@@ -15,20 +15,6 @@
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "baseUrl": ".",
-    "paths": {
-      "@llm-router/core": ["packages/core/src/index.ts"],
-      "@llm-router/catalog": ["packages/catalog/src/index.ts"],
-      "@llm-router/evals": ["packages/evals/src/index.ts"],
-      "@llm-router/observability": ["packages/observability/src/index.ts"],
-      "@llm-router/adapter-openai-compatible": ["packages/adapter-openai-compatible/src/index.ts"],
-      "@llm-router/adapter-openai": ["packages/adapter-openai/src/index.ts"],
-      "@llm-router/adapter-anthropic": ["packages/adapter-anthropic/src/index.ts"],
-      "@llm-router/adapter-google": ["packages/adapter-google/src/index.ts"],
-      "@llm-router/adapter-openrouter": ["packages/adapter-openrouter/src/index.ts"],
-      "@llm-router/proxy": ["packages/proxy/src/index.ts"],
-      "@llm-router/cli": ["packages/cli/src/index.ts"]
-    }
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
   }
 }

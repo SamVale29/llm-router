@@ -23,11 +23,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high
+        if: matrix.node == 22
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm catalog:validate
       - run: pnpm test
+      - run: pnpm test:coverage
       - run: pnpm build
       - run: pnpm pack:check
       - run: pnpm exec playwright install --with-deps chromium
@@ -36,7 +39,9 @@ jobs:
         if: always()
         with:
           name: reports-node-${{ matrix.node }}
-          path: reports/
+          path: |
+            reports/
+            coverage/
   dependency-review:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
@@ -60,3 +65,43 @@ jobs:
           languages: javascript-typescript
       - uses: github/codeql-action/autobuild@v4
       - uses: github/codeql-action/analyze@v4
+  audit-required:
+    name: audit-required
+    if: always()
+    needs: [quality, dependency-review, codeql, container-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all validation jobs
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          DEPENDENCIES: ${{ needs.dependency-review.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          CONTAINER: ${{ needs.container-smoke.result }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          test "$QUALITY" = success
+          test "$CODEQL" = success
+          test "$CONTAINER" = success
+          if [ "$EVENT" = pull_request ]; then test "$DEPENDENCIES" = success; fi
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start decision-only proxy
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml up --build -d
+      - name: Verify authenticated decision endpoint
+        run: |
+          curl --fail --retry 20 --retry-all-errors --retry-max-time 60 --connect-timeout 2 --retry-delay 2 -H 'Authorization: Bearer ci-smoke-token' http://127.0.0.1:8787/health
+          curl --fail -H 'Authorization: Bearer ci-smoke-token' -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:8787/v1/router/decide
+      - name: Show proxy logs on failure
+        if: failure()
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml logs
+      - name: Stop proxy
+        if: always()
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml down

@@ -13,54 +13,172 @@ import type {
   StrategyWeights,
 } from "./types.js";
 
+const strategyKinds = [
+  "rules",
+  "cheapest-qualified",
+  "fastest-qualified",
+  "weighted-score",
+  "priority",
+  "random-weighted",
+  "round-robin",
+  "cascade",
+  "custom",
+] as const;
+const strategyKindSchema = z.enum(strategyKinds);
+const providerErrorCodes = [
+  "authentication",
+  "permission",
+  "rate-limit",
+  "quota",
+  "timeout",
+  "unavailable",
+  "invalid-request",
+  "context-length",
+  "content-filter",
+  "unsupported-capability",
+  "connection",
+  "cancelled",
+  "unknown",
+] as const;
+const providerErrorCodeSchema = z.enum(providerErrorCodes);
 const strategySchema = z.union([
-  z.string(),
-  z.object({
-    kind: z.string(),
-    id: z.string().optional(),
-    weights: z.record(z.number()).optional(),
-    candidates: z.array(z.string()).optional(),
-    stages: z.array(z.unknown()).optional(),
-    seed: z.number().optional(),
-  }),
-]);
-
-const policySchema = z.object({
-  version: z.string(),
-  defaults: z
+  strategyKindSchema,
+  z
     .object({
-      strategy: strategySchema.optional(),
-      fallbackAllowed: z.boolean().optional(),
-      qualityProfile: z.enum(["economy", "balanced", "premium"]).optional(),
+      kind: strategyKindSchema,
+      id: z.string().optional(),
+      weights: z.record(z.number()).optional(),
+      candidates: z.array(z.string()).optional(),
+      stages: z.array(z.unknown()).optional(),
+      seed: z.number().optional(),
+      requireObservedLatency: z.boolean().optional(),
+      unknownCost: z.enum(["allow-with-warning", "exclude"]).optional(),
     })
-    .optional(),
-  models: z
-    .array(
-      z.object({
-        id: z.string(),
-        provider: z.string(),
-        model: z.string(),
-        tags: z.array(z.string()).optional(),
-      }),
-    )
-    .optional(),
-  routes: z
-    .array(
-      z.object({
-        id: z.string(),
-        when: z.record(z.unknown()).default({}),
-        require: z.record(z.unknown()).optional(),
-        prefer: z.record(z.unknown()).optional(),
-        select: z.record(z.unknown()),
-      }),
-    )
-    .min(1),
-  fallbacks: z
-    .array(z.object({ from: z.string(), to: z.array(z.string()), on: z.array(z.string()) }))
-    .optional(),
-  resilience: z.record(z.unknown()).optional(),
-  evaluation: z.record(z.unknown()).optional(),
-});
+    .strict(),
+]);
+const strategyWeightsSchema = z
+  .object({
+    taskFit: z.number().optional(),
+    quality: z.number().optional(),
+    cost: z.number().optional(),
+    latency: z.number().optional(),
+    reliability: z.number().optional(),
+  })
+  .partial()
+  .strict();
+const whenSchema = z
+  .object({
+    task: z
+      .union([z.string(), z.array(z.string()), z.object({ anyOf: z.array(z.string()).min(1) })])
+      .optional(),
+    modalities: z.array(z.string()).optional(),
+    language: z.union([z.string(), z.array(z.string())]).optional(),
+    metadata: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  })
+  .strict();
+const requireSchema = z
+  .object({
+    capabilities: z.array(z.string()).optional(),
+    inputModalities: z.array(z.string()).optional(),
+    minContextTokens: z.number().optional(),
+    tags: z.array(z.string()).optional(),
+  })
+  .strict();
+const preferSchema = z
+  .object({ tags: z.array(z.string()).optional(), providers: z.array(z.string()).optional() })
+  .strict();
+
+const policySchema = z
+  .object({
+    version: z.string(),
+    defaults: z
+      .object({
+        strategy: strategySchema.optional(),
+        fallbackAllowed: z.boolean().optional(),
+        qualityProfile: z.enum(["economy", "balanced", "premium"]).optional(),
+      })
+      .strict()
+      .optional(),
+    models: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            provider: z.string(),
+            model: z.string(),
+            tags: z.array(z.string()).optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    routes: z
+      .array(
+        z
+          .object({
+            id: z.string(),
+            when: whenSchema.default({}),
+            require: requireSchema.optional(),
+            prefer: preferSchema.optional(),
+            select: z
+              .object({
+                strategy: strategySchema.optional(),
+                candidates: z.array(z.string()).optional(),
+                weights: strategyWeightsSchema.optional(),
+              })
+              .strict(),
+          })
+          .strict(),
+      )
+      .min(1),
+    fallbacks: z
+      .array(
+        z
+          .object({
+            from: z.string(),
+            to: z.array(z.string()),
+            on: z.array(providerErrorCodeSchema),
+          })
+          .strict(),
+      )
+      .optional(),
+    resilience: z
+      .object({
+        deadlineMs: z.number().positive().optional(),
+        retry: z
+          .object({
+            maxAttempts: z.number().int().positive().optional(),
+            retryableErrors: z.array(providerErrorCodeSchema).optional(),
+            baseDelayMs: z.number().nonnegative().optional(),
+            maxDelayMs: z.number().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        fallback: z
+          .object({
+            maxModelFallbacks: z.number().int().nonnegative().optional(),
+            errors: z.array(providerErrorCodeSchema).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    evaluation: z
+      .object({
+        gates: z
+          .object({
+            maxQualityDrop: z.number().optional(),
+            minCostReduction: z.number().optional(),
+            maxConstraintViolations: z.number().int().nonnegative().optional(),
+            maxP95LatencyIncrease: z.number().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export function definePolicy<T extends RoutingPolicy>(policy: T): T {
   validatePolicy(policy);
@@ -125,6 +243,8 @@ export function validatePolicy(
         ? route.select.strategy.weights
         : undefined);
     if (weights) validateWeights(weights, `routes.${index}.select.weights`, issues);
+    if (route.select.strategy)
+      validateStrategyKind(route.select.strategy, `routes.${index}.select.strategy`, issues);
     previousRouteIsCatchAll = previousRouteIsCatchAll || Object.keys(route.when).length === 0;
     for (const [candidateIndex, candidate] of (route.select.candidates ?? []).entries()) {
       if (
@@ -169,8 +289,11 @@ export function validatePolicy(
         });
   }
   issues.push(...findFallbackCycles(policy.fallbacks ?? []));
-  if (policy.defaults?.strategy?.kind === "weighted-score" && policy.defaults.strategy.weights)
-    validateWeights(policy.defaults.strategy.weights, "defaults.strategy.weights", issues);
+  if (policy.defaults?.strategy) {
+    validateStrategyKind(policy.defaults.strategy, "defaults.strategy", issues);
+    if (policy.defaults.strategy.kind === "weighted-score" && policy.defaults.strategy.weights)
+      validateWeights(policy.defaults.strategy.weights, "defaults.strategy.weights", issues);
+  }
   if (issues.length) throw new PolicyValidationError(issues);
   return issues;
 }
@@ -218,25 +341,59 @@ export function normalizePolicy(input: Record<string, unknown>): RoutingPolicy {
 }
 
 export function policyJsonSchema(): Record<string, unknown> {
+  const weights = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      taskFit: { type: "number", minimum: 0, maximum: 1 },
+      quality: { type: "number", minimum: 0, maximum: 1 },
+      cost: { type: "number", minimum: 0, maximum: 1 },
+      latency: { type: "number", minimum: 0, maximum: 1 },
+      reliability: { type: "number", minimum: 0, maximum: 1 },
+    },
+  };
+  const strategy = {
+    oneOf: [
+      { type: "string", enum: [...strategyKinds] },
+      {
+        type: "object",
+        required: ["kind"],
+        additionalProperties: false,
+        properties: {
+          kind: { type: "string", enum: [...strategyKinds] },
+          id: { type: "string" },
+          weights,
+          candidates: { type: "array", items: { type: "string" } },
+          stages: { type: "array" },
+          seed: { type: "number" },
+          requireObservedLatency: { type: "boolean" },
+          unknownCost: { enum: ["allow-with-warning", "exclude"] },
+        },
+      },
+    ],
+  };
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     title: "LLM Router policy",
     type: "object",
     required: ["version", "routes"],
+    additionalProperties: false,
     properties: {
       version: { type: "string" },
       defaults: {
         type: "object",
+        additionalProperties: false,
         properties: {
           fallbackAllowed: { type: "boolean" },
           qualityProfile: { enum: ["economy", "balanced", "premium"] },
-          strategy: { type: ["string", "object"] },
+          strategy,
         },
       },
       models: {
         type: "array",
         items: {
           type: "object",
+          additionalProperties: false,
           required: ["id", "provider", "model"],
           properties: {
             id: { type: "string" },
@@ -248,15 +405,53 @@ export function policyJsonSchema(): Record<string, unknown> {
       },
       routes: {
         type: "array",
+        minItems: 1,
         items: {
           type: "object",
-          required: ["id", "when", "select"],
+          additionalProperties: false,
+          required: ["id", "select"],
           properties: {
             id: { type: "string" },
-            when: { type: "object" },
-            require: { type: "object" },
-            prefer: { type: "object" },
-            select: { type: "object" },
+            when: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                task: { type: ["string", "array", "object"] },
+                modalities: { type: "array", items: { type: "string" } },
+                language: { type: ["string", "array"] },
+                metadata: {
+                  type: "object",
+                  additionalProperties: { type: ["string", "number", "boolean"] },
+                },
+              },
+            },
+            require: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                capabilities: { type: "array", items: { type: "string" } },
+                inputModalities: { type: "array", items: { type: "string" } },
+                minContextTokens: { type: "number" },
+                tags: { type: "array", items: { type: "string" } },
+              },
+            },
+            prefer: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                tags: { type: "array", items: { type: "string" } },
+                providers: { type: "array", items: { type: "string" } },
+              },
+            },
+            select: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                strategy,
+                candidates: { type: "array", items: { type: "string" } },
+                weights,
+              },
+            },
           },
         },
       },
@@ -355,6 +550,23 @@ function normalizeModel(input: Record<string, unknown>): PolicyModelRef {
 function normalizeStrategy(input: unknown): StrategyConfig {
   if (typeof input === "string") return { kind: input as StrategyConfig["kind"] } as StrategyConfig;
   return input as StrategyConfig;
+}
+
+function validateStrategyKind(
+  strategy: StrategyConfig,
+  path: string,
+  issues: Array<{ path: string; message: string }>,
+): void {
+  if (strategy.kind === "custom" && !strategy.id)
+    issues.push({
+      path: `${path}.id`,
+      message: "Custom strategies require a registered strategy id.",
+    });
+  if (!strategyKinds.includes(strategy.kind as (typeof strategyKinds)[number]))
+    issues.push({
+      path: `${path}.kind`,
+      message: `Unknown strategy kind ${String(strategy.kind)}. Expected one of ${strategyKinds.join(", ")}.`,
+    });
 }
 
 function validateWeights(

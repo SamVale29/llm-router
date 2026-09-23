@@ -3,12 +3,15 @@ import { estimateRequestCost } from "./cost.js";
 import { NoEligibleModelError, normalizedErrorFromUnknown } from "./errors.js";
 import { createInMemoryBudgetStore, createInMemoryHealthStore } from "./health.js";
 import { sha256, stableStringify } from "./hash.js";
-import { normalizeRequest } from "./normalize.js";
+import { DEFAULT_NON_TEXT_PART_TOKENS, normalizeRequest } from "./normalize.js";
 import { validatePolicy } from "./policy.js";
 import { validateJsonSchema } from "./schema.js";
 import { detectTask } from "./tasks.js";
 import type {
   AdapterResponse,
+  AdapterUsage,
+  ToolCall,
+  CascadeStage,
   AdapterStreamEvent,
   Catalog,
   ExecutionContext,
@@ -17,8 +20,8 @@ import type {
   NormalizedProviderError,
   NormalizedRoutingRequest,
   PolicyRoute,
-  ProviderAdapter,
   ProviderAttempt,
+  ProviderAdapter,
   RoutingCandidate,
   RoutingDecision,
   RoutingPolicy,
@@ -35,9 +38,22 @@ import type {
 } from "./types.js";
 
 const DEFAULT_LIBRARY_VERSION = "0.1.0";
+let requestSequence = 0;
+
+function createRequestId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `request-${uuid}`;
+
+  requestSequence = (requestSequence + 1) % 0x1_0000_0000;
+  return `request-${Date.now().toString(36)}-${requestSequence.toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
 
 export function createRouter(options: RouterOptions): Router {
   validatePolicy(options.policy, options.catalog);
+  if (options.executeShadowRequests)
+    throw new Error(
+      "executeShadowRequests is unsupported; shadow() evaluates decisions without provider calls.",
+    );
   const healthStore = options.healthStore ?? createInMemoryHealthStore({ now: options.now });
   const budgetStore = options.budgetStore ?? createInMemoryBudgetStore();
   const now = options.now ?? (() => new Date());
@@ -62,9 +78,12 @@ export function createRouter(options: RouterOptions): Router {
   ): Promise<RoutingDecision> {
     const startedAt = now();
     const started = performance.now();
-    const requestId = request.id ?? `request-${Date.now().toString(36)}`;
+    const requestId = request.id ?? createRequestId();
     await runHook(options.hooks?.beforeNormalize, { requestId, event: "beforeNormalize" });
-    const normalized = normalizeRequest({ ...request, ...(request.id ? {} : { id: requestId }) });
+    const normalized = normalizeRequest(
+      { ...request, ...(request.id ? {} : { id: requestId }) },
+      options.tokenEstimation,
+    );
     await runHook(options.hooks?.afterNormalize, {
       requestId: normalized.id,
       event: "afterNormalize",
@@ -89,9 +108,22 @@ export function createRouter(options: RouterOptions): Router {
     const policyModels = materializeModels(options.catalog, policy);
     const selectedIds = route?.select.candidates ?? policyModels.map((model) => model.id);
     const selectedIdSet = new Set(selectedIds);
-    const models = policyModels.filter((model) => selectedIdSet.has(model.id));
+    const models = [...selectedIdSet].flatMap(
+      (id) => policyModels.find((model) => model.id === id) ?? [],
+    );
     const warnings: string[] = [];
-    const budgetScope = usageScope(effectiveRequest);
+    if (
+      normalized.inputTokenEstimate?.source === "default" &&
+      normalized.inputTokenEstimate.nonTextParts > 0
+    )
+      warnings.push(
+        `Input token estimate uses the default ${DEFAULT_NON_TEXT_PART_TOKENS} tokens per non-text part; provide input.estimatedTokens or configure tokenEstimation.nonTextPartTokens for a calibrated estimate.`,
+      );
+    const budgetScope = usageScope(effectiveRequest, now());
+    if (constraints.maxMonthlyBudget !== undefined && !hasExplicitBudgetScope(effectiveRequest))
+      warnings.push(
+        "maxMonthlyBudget is enforced against the router-wide monthly scope because no userId or projectId was provided.",
+      );
     const budgetUsage =
       constraints.maxMonthlyBudget === undefined ? null : await budgetStore.getUsage(budgetScope);
     const candidates: RoutingCandidate[] = [];
@@ -108,6 +140,7 @@ export function createRouter(options: RouterOptions): Router {
       if (
         constraints.maxExpectedLatencyMs !== undefined &&
         model.metadata?.observedLatencyMs === undefined &&
+        model.metadata?.observedP95LatencyMs === undefined &&
         health.p95LatencyMs === undefined
       )
         eliminatedBy.push({
@@ -197,16 +230,20 @@ export function createRouter(options: RouterOptions): Router {
       });
     }
     if (!candidates.length) warnings.push("The selected route has no model candidates.");
-    normalizeCandidateScores(candidates, warnings);
+    const strategy = resolveStrategy(
+      route?.select.strategy ?? policy.defaults?.strategy ?? { kind: "weighted-score" },
+      route?.select.weights,
+    );
+    normalizeCandidateScores(
+      candidates,
+      warnings,
+      strategy.kind === "weighted-score" ? strategy.weights : undefined,
+    );
     await runHook(options.hooks?.beforeSelect, {
       requestId: normalized.id,
       task,
       event: "beforeSelect",
     });
-    const strategy = resolveStrategy(
-      route?.select.strategy ?? policy.defaults?.strategy ?? { kind: "weighted-score" },
-      route?.select.weights,
-    );
     const strategyResult = await selectModel(
       strategy,
       {
@@ -242,10 +279,10 @@ export function createRouter(options: RouterOptions): Router {
       policy,
       selected?.model.id ?? null,
       candidates,
-      constraints.fallbackAllowed !== false,
+      constraints.fallbackAllowed !== false && policy.defaults?.fallbackAllowed !== false,
       policy.resilience?.fallback?.maxModelFallbacks ?? 2,
     );
-    const hashInput = { ...effectiveRequest, id: undefined };
+    const hashInput = { ...effectiveRequest, id: undefined, signal: undefined };
     const normalizedRequestHash = await sha256(stableStringify(hashInput));
     const durationMs = Math.max(0, performance.now() - started);
     const decision: RoutingDecision = {
@@ -291,283 +328,393 @@ export function createRouter(options: RouterOptions): Router {
   }
 
   async function execute<T = unknown>(request: RoutingRequest): Promise<ExecutionResult<T>> {
-    const decision = await decide(request);
-    await runHook(options.hooks?.beforeExecute, {
-      requestId: decision.requestId,
-      decision,
-      event: "beforeExecute",
-    });
-    if (!decision.selected) throw new NoEligibleModelError(undefined, { decision });
-    const normalized = normalizeRequest({ ...request, id: decision.requestId });
-    const candidatesById = new Map(
-      decision.candidates.map((candidate) => [candidate.model.id, candidate.model]),
-    );
-    const chain = [
-      decision.selected.modelId,
-      ...decision.fallbackChain.map((entry) => entry.modelId),
-    ];
-    const maxAttempts = policyRetryMax(options.policy);
-    const retryableErrors = options.policy.resilience?.retry?.retryableErrors ?? [
-      "rate-limit",
-      "timeout",
-      "unavailable",
-      "connection",
-    ];
-    const fallbackErrors = options.policy.resilience?.fallback?.errors ?? [
-      "rate-limit",
-      "timeout",
-      "unavailable",
-    ];
+    for await (const event of run(request, false)) {
+      if (event.type === "complete") return event.result as ExecutionResult<T>;
+      if (event.type === "error")
+        throw new NoEligibleModelError(event.error.message, { error: event.error });
+    }
+    throw new NoEligibleModelError("Execution did not complete.");
+  }
+
+  async function* stream(request: RoutingRequest): AsyncIterable<RouterEvent> {
+    yield* run(request, true);
+  }
+
+  // A single decision and lifecycle for normal and streaming execution.
+  async function* run(request: RoutingRequest, streaming: boolean): AsyncGenerator<RouterEvent> {
+    if (options.decisionOnly) {
+      yield {
+        type: "error",
+        error: executionError(
+          "permission",
+          "Provider execution is disabled in decision-only mode.",
+        ),
+      };
+      return;
+    }
+    const started = performance.now();
     const deadlineMs = options.policy.resilience?.deadlineMs ?? 20_000;
-    const executionStarted = performance.now();
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const cancel = () => controller.abort(executionError("cancelled", "Request cancelled."));
+    request.signal?.addEventListener("abort", cancel, { once: true });
+    if (request.signal?.aborted) cancel();
+    const timer = setTimeout(
+      () => controller.abort(executionError("timeout", "Global execution deadline exceeded.")),
+      deadlineMs,
+    );
     const attempts: ProviderAttempt[] = [];
-    let selectedAttempt: number | undefined;
-    let finalResponse: AdapterResponse | undefined;
-    let finalError: NormalizedProviderError | undefined;
-    for (let chainIndex = 0; chainIndex < chain.length; chainIndex++) {
-      const modelId = chain[chainIndex];
-      if (!modelId) continue;
-      const model = candidatesById.get(modelId);
-      if (!model) continue;
-      const provider = options.catalog.providers.find((item) => item.id === model.providerId);
-      const adapter = provider ? adapterByProvider.get(provider.id) : undefined;
-      if (!adapter) {
-        finalError = {
-          code: "unavailable",
-          message: `No adapter is registered for provider ${model.providerId}.`,
-          retryable: false,
-          fallbackEligible: true,
-          providerId: model.providerId,
-          modelId: model.id,
-        };
-        continue;
-      }
-      adapter.validateModel(model);
-      for (let retry = 0; retry < maxAttempts; retry++) {
-        const attemptNumber = attempts.length + 1;
-        const attemptStartedAt = now();
-        const attemptStarted = performance.now();
-        const remaining = Math.max(1, deadlineMs - (performance.now() - executionStarted));
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), remaining);
-        const context: ExecutionContext = {
-          signal: controller.signal,
-          requestId: decision.requestId,
-          attempt: attemptNumber,
-          timeoutMs: remaining,
-          ...(normalized.providerOptions?.[
-            provider?.adapter as keyof NonNullable<RoutingRequest["providerOptions"]>
-          ]
-            ? {
-                providerOptions:
-                  normalized.providerOptions?.[
-                    provider?.adapter as keyof NonNullable<RoutingRequest["providerOptions"]>
-                  ],
-              }
-            : {}),
-        };
-        try {
-          await emitStreamlessAttempt(
-            options,
-            decision.requestId,
-            model,
-            attemptNumber,
-            "attempt-start",
+    let emitted = false;
+    let lastError: NormalizedProviderError | undefined;
+    try {
+      const decision = await abortable(decide(request), signal);
+      yield { type: "decision", decision };
+      if (!decision.selected)
+        throw executionError("invalid-request", "No eligible model was selected.");
+      const normalized = normalizeRequest(
+        { ...request, id: decision.requestId },
+        options.tokenEstimation,
+      );
+      const task: TaskClassificationResult = {
+        task: decision.task.type,
+        source: decision.task.source,
+      };
+      const route = findRoute(options.policy, normalized, task);
+      const strategy = route?.select.strategy ?? options.policy.defaults?.strategy;
+      const cascade = strategy?.kind === "cascade" ? strategy : undefined;
+      const qualified = decision.candidates.filter((candidate) => candidate.eligible);
+      const byId = new Map(qualified.map((candidate) => [candidate.model.id, candidate]));
+      const plan: Array<{ modelId: string; accept?: CascadeStage["accept"] }> = cascade
+        ? cascade.stages
+            .flatMap((stage) => {
+              const ids = stage.model
+                ? [stage.model]
+                : (stage.candidates ?? qualified.map((c) => c.model.id));
+              const id = ids.find((id) => byId.has(id));
+              return id ? [{ modelId: id, accept: stage.accept }] : [];
+            })
+            .filter(
+              (entry, index, all) =>
+                all.findIndex((other) => other.modelId === entry.modelId) === index,
+            )
+        : [decision.selected.modelId, ...decision.fallbackChain.map((entry) => entry.modelId)].map(
+            (modelId) => ({ modelId }),
           );
-          const response = await adapter.execute(normalized, model, context);
-          clearTimeout(timeout);
-          const durationMs = performance.now() - attemptStarted;
-          const validation = validateResponse(response, normalized);
-          if (!validation.valid) {
-            const error: NormalizedProviderError = {
-              code: "invalid-request",
-              message: `Provider response failed local schema validation: ${validation.errors.join("; ")}`,
-              retryable: false,
-              fallbackEligible: true,
+      const scope = usageScope(normalized, now());
+      const fallbackAllowed =
+        normalized.constraints.fallbackAllowed !== false &&
+        options.policy.defaults?.fallbackAllowed !== false;
+      const fallbackCodes = options.policy.resilience?.fallback?.errors ?? [
+        "rate-limit",
+        "timeout",
+        "unavailable",
+      ];
+      const retryCodes = options.policy.resilience?.retry?.retryableErrors ?? [
+        "rate-limit",
+        "timeout",
+        "unavailable",
+        "connection",
+      ];
+      await runHook(options.hooks?.beforeExecute, {
+        requestId: decision.requestId,
+        decision,
+        event: "beforeExecute",
+      });
+      for (let stageIndex = 0; stageIndex < plan.length; stageIndex++) {
+        const stage = plan[stageIndex];
+        const candidate = stage ? byId.get(stage.modelId) : undefined;
+        if (!stage || !candidate) continue;
+        const model = candidate.model;
+        const provider = options.catalog.providers.find((item) => item.id === model.providerId);
+        const adapter = adapterByProvider.get(model.providerId);
+        let rejectedByCascade = false;
+        for (let retry = 0; retry < policyRetryMax(options.policy); retry++) {
+          throwIfAborted(signal);
+          const attemptStarted = performance.now();
+          const attemptDate = now().toISOString();
+          const attempt = attempts.length + 1;
+          let reservation: string | undefined;
+          let dispatched = false;
+          let reconciled = false;
+          let usage: AdapterUsage | undefined;
+          let response: AdapterResponse | undefined;
+          let iterator: AsyncIterator<AdapterStreamEvent> | undefined;
+          const estimate = candidate.predicted.cost ?? null;
+          // Reserve for every paid attempt, including retries and rejected cascade stages.
+          const settle = async (): Promise<void> => {
+            if (reconciled) return;
+            reconciled = true;
+            const wasDispatched = dispatched;
+            dispatched = false;
+            const amount = wasDispatched ? observedCost(usage, model, estimate) : 0;
+            try {
+              if (reservation) {
+                await budgetStore.settle!(reservation, amount);
+                reservation = undefined;
+              } else if (wasDispatched && amount > 0) {
+                await budgetStore.recordUsage({
+                  scope,
+                  amount,
+                  currency: "USD",
+                  requestId: decision.requestId,
+                  modelId: model.id,
+                });
+              }
+            } catch {
+              throw executionError(
+                "permission",
+                "Budget reconciliation failed; execution stopped.",
+              );
+            }
+          };
+          try {
+            if (!provider || !adapter)
+              throw executionError(
+                "unavailable",
+                `No adapter is registered for provider ${model.providerId}.`,
+              );
+            adapter.validateModel(model);
+            const limit = normalized.constraints.maxMonthlyBudget;
+            if (limit !== undefined) {
+              if (!budgetStore.reserve || !budgetStore.settle)
+                throw executionError(
+                  "permission",
+                  "Budget ceilings require an atomic reserve/settle BudgetStore.",
+                );
+              if (estimate === null)
+                throw executionError("quota", "Cannot reserve unknown request cost.");
+              reservation =
+                (await budgetStore.reserve(
+                  {
+                    scope,
+                    amount: estimate,
+                    currency: "USD",
+                    requestId: decision.requestId,
+                    modelId: model.id,
+                  },
+                  limit,
+                )) ?? undefined;
+              if (!reservation)
+                throw executionError("quota", "Monthly budget reservation rejected.");
+            }
+            throwIfAborted(signal);
+            const attemptRequest = {
+              ...normalized,
+              output: {
+                ...normalized.output,
+                maxTokens: normalized.output.maxTokens ?? candidate.predicted.outputTokens ?? 512,
+              },
+            };
+            const context: ExecutionContext = {
+              signal,
+              requestId: decision.requestId,
+              attempt,
+              timeoutMs: Math.max(0, deadlineMs - (performance.now() - started)),
+              providerOptions:
+                normalized.providerOptions?.[
+                  provider.adapter as keyof NonNullable<RoutingRequest["providerOptions"]>
+                ],
+            };
+            await runHook(options.hooks?.onAttemptStart, {
+              requestId: decision.requestId,
+              decision,
+              event: "onAttemptStart",
+            });
+            throwIfAborted(signal);
+            yield {
+              type: "attempt-start",
               providerId: model.providerId,
               modelId: model.id,
+              attempt,
             };
-            await healthStore.recordFailure(
-              { providerId: model.providerId, modelId: model.id },
-              error,
-              durationMs,
-            );
+            dispatched = true;
+            const buffered = normalized.output.schema !== undefined || !!stage.accept;
+            const pending: RouterEvent[] = [];
+            if (streaming && adapter.stream) {
+              let text = "";
+              const toolCalls: ToolCall[] = [];
+              iterator = adapter.stream(attemptRequest, model, context)[Symbol.asyncIterator]();
+              while (true) {
+                const item = await abortable(iterator.next(), signal);
+                if (item.done) break;
+                const event = item.value;
+                if (event.type === "text-delta") text += event.text;
+                if (text.length > 8_000_000)
+                  throw executionError("invalid-request", "Provider stream exceeds output limit.");
+                if (event.type === "tool-call")
+                  toolCalls.push({
+                    callId: event.callId ?? `call-${toolCalls.length}`,
+                    name: event.name,
+                    arguments: event.arguments,
+                  });
+                if (event.type === "usage") usage = { ...usage, ...event.usage };
+                if (event.type === "complete" && event.response) {
+                  response = event.response;
+                  usage = { ...usage, ...event.response.usage };
+                }
+                for (const output of mapAdapterEvent(event)) {
+                  if (buffered) pending.push(output);
+                  else {
+                    if (output.type === "text-delta" || output.type === "tool-call") emitted = true;
+                    yield output;
+                  }
+                }
+              }
+              response = { data: text, text, toolCalls, ...response, usage };
+            } else {
+              response = await abortable(adapter.execute(attemptRequest, model, context), signal);
+              usage = response.usage;
+            }
+            await settle();
+            throwIfAborted(signal);
+            const validation = validateResponse(response, normalized);
+            if (!validation.valid)
+              throw executionError(
+                "invalid-request",
+                `Provider response failed local schema validation: ${validation.errors.join("; ")}`,
+              );
+            if (stage.accept && !acceptResponse(response, stage.accept)) {
+              rejectedByCascade = true;
+              throw executionError(
+                "invalid-request",
+                "Cascade response did not satisfy the stage acceptance criterion.",
+              );
+            }
+            const durationMs = performance.now() - attemptStarted;
             attempts.push({
               providerId: model.providerId,
               modelId: model.id,
-              attempt: attemptNumber,
-              startedAt: attemptStartedAt.toISOString(),
+              attempt,
+              startedAt: attemptDate,
               durationMs,
-              ok: false,
-              error,
+              ok: true,
             });
-            finalError = error;
-          } else {
             await healthStore.recordSuccess(
               { providerId: model.providerId, modelId: model.id },
               durationMs,
             );
+            if (streaming) {
+              if (adapter.stream) {
+                for (const event of pending) yield event;
+              } else {
+                const text =
+                  response.text ?? (typeof response.data === "string" ? response.data : undefined);
+                if (text) yield { type: "text-delta", text };
+                for (const tool of response.toolCalls ?? []) yield { type: "tool-call", ...tool };
+                if (usage) yield { type: "usage", usage };
+              }
+            }
+            const result: ExecutionResult = {
+              decision,
+              response:
+                normalized.output.schema !== undefined ? responseValue(response) : response.data,
+              text: response.text,
+              toolCalls: response.toolCalls,
+              usage,
+              execution: {
+                attempts,
+                selectedAttempt: attempt,
+                totalDurationMs: performance.now() - started,
+              },
+            };
+            await runHook(options.hooks?.afterExecute, {
+              requestId: decision.requestId,
+              decision,
+              event: "afterExecute",
+            });
+            await runHook(options.hooks?.onComplete, {
+              requestId: decision.requestId,
+              decision,
+              event: "onComplete",
+            });
+            yield { type: "complete", result };
+            return;
+          } catch (cause) {
+            lastError = signal.aborted
+              ? normalizedErrorFromUnknown(signal.reason)
+              : adapter
+                ? adapter.normalizeError(cause)
+                : normalizedErrorFromUnknown(cause);
+            const durationMs = performance.now() - attemptStarted;
             attempts.push({
               providerId: model.providerId,
               modelId: model.id,
-              attempt: attemptNumber,
-              startedAt: attemptStartedAt.toISOString(),
+              attempt,
+              startedAt: attemptDate,
               durationMs,
-              ok: true,
+              ok: false,
+              error: lastError,
             });
-            selectedAttempt = attemptNumber;
-            finalResponse = response;
-            const usageCost =
-              response.usage?.cost ??
-              (response.usage?.inputTokens !== undefined &&
-              response.usage?.outputTokens !== undefined
-                ? (estimateRequestCost({
-                    model,
-                    estimatedInputTokens: response.usage.inputTokens,
-                    estimatedOutputTokens: response.usage.outputTokens,
-                  }).total ?? 0)
-                : 0);
-            const scope = usageScope(normalized);
-            if (usageCost > 0)
-              await budgetStore.recordUsage({
-                scope,
-                amount: usageCost,
-                currency: "USD",
-                requestId: decision.requestId,
-                modelId: model.id,
-              });
-            break;
+            if (dispatched)
+              await healthStore.recordFailure(
+                { providerId: model.providerId, modelId: model.id },
+                lastError,
+                durationMs,
+              );
+            await runHook(options.hooks?.onAttemptError, {
+              requestId: decision.requestId,
+              decision,
+              event: "onAttemptError",
+            });
+            await settle();
+            if (
+              emitted ||
+              rejectedByCascade ||
+              signal.aborted ||
+              !lastError.retryable ||
+              !retryCodes.includes(lastError.code) ||
+              retry + 1 >= policyRetryMax(options.policy)
+            )
+              break;
+            const waitMs = backoffMs(retry, lastError.retryAfterMs, random, options.policy);
+            const remaining = deadlineMs - (performance.now() - started);
+            if (waitMs >= remaining)
+              throw executionError("timeout", "Retry would exceed global execution deadline.");
+            await abortableDelay(waitMs, signal);
+          } finally {
+            // Consumer return() also runs this path: stop network activity before reconciling usage.
+            if (dispatched && !signal.aborted)
+              controller.abort(executionError("cancelled", "Stream consumer stopped."));
+            if (iterator?.return) void iterator.return().catch(() => undefined);
+            await settle();
           }
-        } catch (cause) {
-          clearTimeout(timeout);
-          const error = adapter.normalizeError(cause);
-          const durationMs = performance.now() - attemptStarted;
-          await healthStore.recordFailure(
-            { providerId: model.providerId, modelId: model.id },
-            error,
-            durationMs,
-          );
-          attempts.push({
-            providerId: model.providerId,
-            modelId: model.id,
-            attempt: attemptNumber,
-            startedAt: attemptStartedAt.toISOString(),
-            durationMs,
-            ok: false,
-            error,
-          });
-          finalError = error;
-          await runHook(options.hooks?.onAttemptError, {
-            requestId: decision.requestId,
-            decision,
-            event: "onAttemptError",
-          });
-          if (!error.retryable || !retryableErrors.includes(error.code)) break;
-          if (retry + 1 < maxAttempts)
-            await delay(backoffMs(retry, error.retryAfterMs, options.random ?? Math.random));
         }
-        if (finalResponse) break;
-      }
-      if (finalResponse) break;
-      const canFallback =
-        finalError &&
-        fallbackErrors.includes(finalError.code) &&
-        constraintsAllowFallback(normalized);
-      if (!canFallback) break;
-      const nextModelId = chain[chainIndex + 1];
-      if (nextModelId) {
+        const next = plan[stageIndex + 1];
+        const rule = options.policy.fallbacks?.find((rule) => rule.from === model.id);
+        const permitted = rejectedByCascade
+          ? !!cascade
+          : !!lastError?.fallbackEligible &&
+            fallbackCodes.includes(lastError.code) &&
+            (!rule ||
+              (!!next && rule.to.includes(next.modelId) && rule.on.includes(lastError.code)));
+        if (
+          !next ||
+          emitted ||
+          signal.aborted ||
+          !fallbackAllowed ||
+          !permitted ||
+          stageIndex >= (options.policy.resilience?.fallback?.maxModelFallbacks ?? 2)
+        )
+          break;
         await runHook(options.hooks?.onFallback, {
           requestId: decision.requestId,
           decision,
           event: "onFallback",
         });
-      }
-    }
-    if (!finalResponse)
-      throw new NoEligibleModelError(finalError?.message ?? "All model attempts failed.", {
-        decision,
-        attempts,
-      });
-    const result: ExecutionResult<T> = {
-      decision,
-      response: finalResponse.data as T,
-      ...(finalResponse.usage ? { usage: finalResponse.usage } : {}),
-      execution: {
-        attempts,
-        ...(selectedAttempt === undefined ? {} : { selectedAttempt }),
-        totalDurationMs: performance.now() - executionStarted,
-      },
-    };
-    await runHook(options.hooks?.afterExecute, {
-      requestId: decision.requestId,
-      decision,
-      event: "afterExecute",
-    });
-    await runHook(options.hooks?.onComplete, {
-      requestId: decision.requestId,
-      decision,
-      event: "onComplete",
-    });
-    return result;
-  }
-
-  async function* stream(request: RoutingRequest): AsyncIterable<RouterEvent> {
-    const decision = await decide(request);
-    yield { type: "decision", decision };
-    if (!decision.selected) {
-      yield {
-        type: "error",
-        error: {
-          code: "invalid-request",
-          message: "No eligible model was selected.",
-          retryable: false,
-          fallbackEligible: false,
-        },
-      };
-      return;
-    }
-    const selected = options.catalog.models.find(
-      (model) => model.id === decision.selected?.modelId,
-    );
-    const provider = selected
-      ? options.catalog.providers.find((item) => item.id === selected.providerId)
-      : undefined;
-    const adapter = provider ? adapterByProvider.get(provider.id) : undefined;
-    if (selected && adapter?.stream) {
-      const normalized = normalizeRequest({ ...request, id: decision.requestId });
-      const controller = new AbortController();
-      try {
         yield {
-          type: "attempt-start",
-          providerId: selected.providerId,
-          modelId: selected.id,
-          attempt: 1,
+          type: "fallback",
+          fromModelId: model.id,
+          toModelId: next.modelId,
+          reason: lastError?.message ?? "Cascade escalation",
         };
-        for await (const event of adapter.stream(normalized, selected, {
-          signal: controller.signal,
-          requestId: decision.requestId,
-          attempt: 1,
-          timeoutMs: options.policy.resilience?.deadlineMs ?? 20_000,
-        }))
-          yield* mapAdapterEvent(event);
-        yield {
-          type: "complete",
-          result: { decision, execution: { attempts: [], totalDurationMs: 0 } },
-        };
-        return;
-      } catch (cause) {
-        const error = adapter.normalizeError(cause);
-        yield { type: "error", error };
-        return;
       }
-    }
-    try {
-      const result = await execute(request);
-      if (typeof result.response === "string") yield { type: "text-delta", text: result.response };
-      if (result.usage) yield { type: "usage", usage: result.usage };
-      yield { type: "complete", result };
+      throw lastError ?? executionError("unavailable", "All model attempts failed.");
     } catch (cause) {
       yield { type: "error", error: normalizedErrorFromUnknown(cause) };
+    } finally {
+      clearTimeout(timer);
+      request.signal?.removeEventListener("abort", cancel);
+      if (!signal.aborted) controller.abort(executionError("cancelled", "Execution closed."));
     }
   }
 
@@ -755,7 +902,10 @@ async function selectModel(
       weight: config.weights?.[candidate.model.id] ?? 1,
     }));
     const total = values.reduce((sum, value) => sum + value.weight, 0);
-    const source = config.seed === undefined ? random : seededRandom(config.seed);
+    const source =
+      config.seed === undefined
+        ? random
+        : seededRandom((config.seed ^ stringSeed(context.request.id)) >>> 0);
     let cursor = source() * total;
     const selected = values.find((value) => {
       cursor -= value.weight;
@@ -782,11 +932,11 @@ async function selectModel(
   }
   if (config.kind === "cascade") {
     for (const stage of config.stages) {
-      const stageCandidates = eligible.filter(
-        (candidate) =>
-          !stage.model ||
-          candidate.model.id === stage.model ||
-          stage.candidates?.includes(candidate.model.id),
+      const ids = stage.model
+        ? [stage.model]
+        : (stage.candidates ?? eligible.map((candidate) => candidate.model.id));
+      const stageCandidates = ids.flatMap(
+        (id) => eligible.find((candidate) => candidate.model.id === id) ?? [],
       );
       if (stageCandidates[0])
         return {
@@ -832,7 +982,11 @@ async function selectModel(
   };
 }
 
-function normalizeCandidateScores(candidates: RoutingCandidate[], warnings: string[]): void {
+function normalizeCandidateScores(
+  candidates: RoutingCandidate[],
+  warnings: string[],
+  configuredWeights?: StrategyWeights,
+): void {
   const eligible = candidates.filter((candidate) => candidate.eligible);
   const costs = eligible
     .map((candidate) => candidate.predicted.cost)
@@ -844,7 +998,7 @@ function normalizeCandidateScores(candidates: RoutingCandidate[], warnings: stri
   const maxCost = Math.max(...costs);
   const minLatency = Math.min(...latencies);
   const maxLatency = Math.max(...latencies);
-  const weights = normalizeWeights(undefined);
+  const weights = normalizeWeights(configuredWeights);
   for (const candidate of candidates) {
     if (!candidate.eligible) {
       candidate.scores.total = null;
@@ -966,8 +1120,8 @@ function validateResponse(
   response: AdapterResponse,
   request: NormalizedRoutingRequest,
 ): { valid: boolean; errors: string[] } {
-  if (!request.output.schema) return { valid: true, errors: [] };
-  const value = response.data ?? (response.text ? tryParseJson(response.text) : undefined);
+  if (request.output.schema === undefined) return { valid: true, errors: [] };
+  const value = responseValue(response);
   return validateJsonSchema(value, request.output.schema);
 }
 
@@ -981,11 +1135,87 @@ function tryParseJson(value: string): unknown {
 function policyRetryMax(policy: RoutingPolicy): number {
   return Math.max(1, Math.min(5, policy.resilience?.retry?.maxAttempts ?? 2));
 }
-function backoffMs(retry: number, retryAfterMs: number | undefined, random: () => number): number {
-  return retryAfterMs ?? Math.min(2_000, 100 * 2 ** retry + Math.round(random() * 100));
+function backoffMs(
+  retry: number,
+  retryAfterMs: number | undefined,
+  random: () => number,
+  policy: RoutingPolicy,
+): number {
+  if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs)) return Math.max(0, retryAfterMs);
+  const base = policy.resilience?.retry?.baseDelayMs ?? 100;
+  const max = policy.resilience?.retry?.maxDelayMs ?? 2000;
+  return Math.min(max, base * 2 ** retry + Math.round(random() * base));
 }
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function executionError(
+  code: NormalizedProviderError["code"],
+  message: string,
+): NormalizedProviderError {
+  const retryable = ["timeout", "unavailable", "connection", "rate-limit"].includes(code);
+  return { code, message, retryable, fallbackEligible: retryable };
+}
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason;
+}
+async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void work.catch(() => undefined);
+    throw signal.reason;
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await abortable(
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+      signal,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function responseValue(response: AdapterResponse): unknown {
+  return response.text !== undefined
+    ? tryParseJson(response.text)
+    : typeof response.data === "string"
+      ? tryParseJson(response.data)
+      : response.data;
+}
+function acceptResponse(
+  response: AdapterResponse,
+  accept: NonNullable<CascadeStage["accept"]>,
+): boolean {
+  return accept.type === "regex"
+    ? new RegExp(accept.pattern).test(
+        response.text ??
+          (typeof response.data === "string" ? response.data : JSON.stringify(response.data)),
+      )
+    : validateJsonSchema(responseValue(response), accept.schema).valid;
+}
+function observedCost(
+  usage: AdapterUsage | undefined,
+  model: ModelDefinition,
+  estimate: number | null,
+): number {
+  if (usage?.cost !== undefined && Number.isFinite(usage.cost) && usage.cost >= 0)
+    return usage.cost;
+  if (usage?.inputTokens !== undefined && usage.outputTokens !== undefined) {
+    const actual = estimateRequestCost({
+      model,
+      estimatedInputTokens: usage.inputTokens,
+      estimatedOutputTokens: usage.outputTokens,
+      cachedInputTokens: usage.cachedInputTokens,
+    }).total;
+    if (actual !== null && Number.isFinite(actual) && actual >= 0) return actual;
+  }
+  // Unknown billing is conservatively charged at the reserved estimate, never silently free.
+  return estimate ?? 0;
 }
 function formatNumber(value: number | null | undefined): string {
   return value == null ? "unknown" : Number(value.toFixed(6)).toString();
@@ -1001,35 +1231,38 @@ function routeReason(route: PolicyRoute | undefined): string[] {
     ? [`Matched policy route ${route.id}.`]
     : ["No specialized route matched; policy defaults were used."];
 }
-function constraintsAllowFallback(request: NormalizedRoutingRequest): boolean {
-  return request.constraints.fallbackAllowed !== false;
-}
-function usageScope(request: NormalizedRoutingRequest): {
-  type: "request" | "user" | "project" | "period";
+function usageScope(
+  request: NormalizedRoutingRequest,
+  date: Date,
+): {
+  type: "user" | "project" | "period";
   id: string;
+  periodStart: string;
 } {
   const metadata = request.metadata ?? {};
-  if (typeof metadata.userId === "string") return { type: "user", id: metadata.userId };
-  if (typeof metadata.projectId === "string") return { type: "project", id: metadata.projectId };
-  return { type: "request", id: request.id };
+  const periodStart = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1),
+  ).toISOString();
+  if (typeof metadata.userId === "string")
+    return { type: "user", id: metadata.userId, periodStart };
+  if (typeof metadata.projectId === "string")
+    return { type: "project", id: metadata.projectId, periodStart };
+  return { type: "period", id: "global", periodStart };
+}
+function hasExplicitBudgetScope(request: NormalizedRoutingRequest): boolean {
+  const metadata = request.metadata ?? {};
+  return typeof metadata.userId === "string" || typeof metadata.projectId === "string";
 }
 async function runHook(
   hook: ((context: RouterHookContext) => void | Promise<void>) | undefined,
   context: RouterHookContext,
 ): Promise<void> {
-  if (hook) await hook(context);
-}
-async function emitStreamlessAttempt(
-  options: RouterOptions,
-  requestId: string,
-  model: ModelDefinition,
-  attempt: number,
-  event: string,
-): Promise<void> {
-  await runHook(options.hooks?.afterSelect, {
-    requestId,
-    event: `${event}:${model.id}:${attempt}`,
-  });
+  if (!hook) return;
+  try {
+    await hook(context);
+  } catch {
+    // Hooks are observability extensions and must not change routing behavior.
+  }
 }
 function mapAdapterEvent(event: AdapterStreamEvent): RouterEvent[] {
   if (event.type === "text-delta") return [{ type: "text-delta", text: event.text }];
@@ -1051,4 +1284,12 @@ function seededRandom(seed: number): () => number {
     state = (state * 1664525 + 1013904223) >>> 0;
     return state / 0x1_0000_0000;
   };
+}
+function stringSeed(value: string): number {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
 }

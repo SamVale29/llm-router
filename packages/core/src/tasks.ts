@@ -69,14 +69,14 @@ function detectByRules(request: NormalizedRoutingRequest): TaskClassificationRes
     )
   )
     return result("translation", 0.83, "translation language pattern");
+  if (/(debug|bug|stack trace|erro|exception|corrija)/i.test(`${text} ${operation}`))
+    return result("debugging", 0.75, "debugging pattern");
   if (
-    /(code review|review this code|revisão de código|pull request|typescript|python|javascript|implement|function|função)/i.test(
+    /(code review|review this code|revisão de código|pull request|typescript|python|javascript)/i.test(
       `${text} ${operation}`,
     )
   )
     return result("code-review", 0.72, "code-related pattern");
-  if (/(debug|bug|stack trace|erro|exception|corrija)/i.test(`${text} ${operation}`))
-    return result("debugging", 0.75, "debugging pattern");
   if (/(summarize|summary|resuma|resumo|tl;dr)/i.test(`${text} ${operation}`))
     return result("summarization", 0.8, "summary pattern");
   if (/(classify|classification|classifique|categoria)/i.test(`${text} ${operation}`))

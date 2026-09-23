@@ -1,0 +1,847 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Router — Promo</title>
+    <style>
+      :root {
+        color: #f5f1e8;
+        background: #11100f;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #11100f;
+      }
+
+      body {
+        position: relative;
+      }
+
+      body::before,
+      body::after {
+        position: absolute;
+        z-index: 0;
+        width: 520px;
+        height: 520px;
+        border-radius: 50%;
+        content: "";
+        filter: blur(1px);
+        pointer-events: none;
+      }
+
+      body::before {
+        top: -300px;
+        right: -90px;
+        background: radial-gradient(circle, rgba(215, 255, 101, 0.12), transparent 68%);
+      }
+
+      body::after {
+        bottom: -360px;
+        left: -140px;
+        background: radial-gradient(circle, rgba(165, 104, 50, 0.2), transparent 67%);
+      }
+
+      #stage {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        width: 100vw;
+        height: 100vh;
+        min-width: 960px;
+        min-height: 540px;
+        padding: 38px 58px 36px;
+        isolation: isolate;
+      }
+
+      .topbar,
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-color: #2b2824;
+        color: #8d887f;
+        font-size: 12px;
+        letter-spacing: 0.03em;
+      }
+
+      .topbar {
+        height: 34px;
+        border-bottom: 1px solid #2b2824;
+        padding-bottom: 22px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #f5f1e8;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0.13em;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 25px;
+        height: 25px;
+        place-items: center;
+        border-radius: 7px;
+        color: #171711;
+        background: #d7ff65;
+        font-size: 16px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      .topbar-right {
+        display: flex;
+        gap: 22px;
+        color: #756f67;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+      }
+
+      .topbar-right strong {
+        color: #d7ff65;
+      }
+
+      #scene {
+        display: grid;
+        flex: 1;
+        grid-template-columns: minmax(0, 0.96fr) minmax(500px, 1.04fr);
+        align-items: center;
+        gap: 54px;
+        padding: 44px 0 30px;
+      }
+
+      .copy {
+        max-width: 590px;
+      }
+
+      .eyebrow {
+        margin: 0 0 18px;
+        color: #d7ff65;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0.2em;
+      }
+
+      h1 {
+        max-width: 670px;
+        margin: 0;
+        color: #f5f1e8;
+        font-size: clamp(42px, 5vw, 74px);
+        font-weight: 760;
+        letter-spacing: -0.055em;
+        line-height: 0.98;
+        text-wrap: balance;
+      }
+
+      h1 em {
+        color: #d7ff65;
+        font-style: normal;
+      }
+
+      .subhead {
+        max-width: 510px;
+        margin: 28px 0 0;
+        color: #aaa39a;
+        font-size: 18px;
+        line-height: 1.45;
+      }
+
+      .scene-index {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 35px;
+        color: #756f67;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+      }
+
+      .scene-index::before {
+        display: block;
+        width: 34px;
+        height: 1px;
+        background: #d7ff65;
+        content: "";
+      }
+
+      #visual {
+        position: relative;
+        display: grid;
+        width: 100%;
+        min-height: 380px;
+        place-items: center;
+      }
+
+      .visual-frame {
+        position: relative;
+        width: min(100%, 650px);
+        min-height: 330px;
+        overflow: hidden;
+        border: 1px solid #3b342c;
+        border-radius: 14px;
+        background: linear-gradient(145deg, rgba(44, 37, 28, 0.72), rgba(18, 17, 16, 0.98));
+        box-shadow: 0 26px 80px rgba(0, 0, 0, 0.26);
+      }
+
+      .visual-frame::before {
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(215, 255, 101, 0.032) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(215, 255, 101, 0.032) 1px, transparent 1px);
+        background-size: 32px 32px;
+        content: "";
+        pointer-events: none;
+      }
+
+      .visual-label {
+        position: absolute;
+        top: 20px;
+        left: 22px;
+        color: #756f67;
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.18em;
+      }
+
+      .signal-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 14px;
+        padding: 64px 30px 28px;
+      }
+
+      .signal-card,
+      .metric-card,
+      .pipeline-step,
+      .candidate,
+      .trace-line {
+        border: 1px solid #433b31;
+        background: rgba(31, 28, 24, 0.84);
+      }
+
+      .signal-card {
+        display: flex;
+        min-height: 102px;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 18px;
+        border-radius: 9px;
+        animation: float 3.5s ease-in-out infinite;
+      }
+
+      .signal-card:nth-child(2) {
+        animation-delay: -0.8s;
+      }
+
+      .signal-card:nth-child(3) {
+        animation-delay: -1.7s;
+      }
+
+      .signal-card:nth-child(4) {
+        animation-delay: -2.4s;
+      }
+
+      .signal-card span {
+        color: #f5f1e8;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .signal-card small {
+        color: #8d887f;
+        font-size: 10px;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+      }
+
+      .signal-card i {
+        display: block;
+        width: 28px;
+        height: 4px;
+        border-radius: 8px;
+        background: #d7ff65;
+      }
+
+      .warning-copy {
+        padding: 72px 36px 26px;
+      }
+
+      .warning-number {
+        color: #ffad72;
+        font-size: 84px;
+        font-weight: 800;
+        letter-spacing: -0.08em;
+        line-height: 0.9;
+      }
+
+      .warning-copy strong {
+        display: block;
+        max-width: 350px;
+        margin-top: 20px;
+        color: #f5f1e8;
+        font-size: 24px;
+        line-height: 1.12;
+      }
+
+      .warning-copy span {
+        display: block;
+        margin-top: 13px;
+        color: #8d887f;
+        font-size: 12px;
+      }
+
+      .warning-line {
+        position: absolute;
+        right: 35px;
+        bottom: 52px;
+        left: 36px;
+        height: 3px;
+        overflow: hidden;
+        border-radius: 4px;
+        background: #3c332b;
+      }
+
+      .warning-line::after {
+        display: block;
+        width: 42%;
+        height: 100%;
+        border-radius: inherit;
+        background: #ffad72;
+        content: "";
+        animation: grow 2.8s ease-in-out infinite alternate;
+      }
+
+      .pipeline {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        align-items: center;
+        gap: 10px;
+        padding: 118px 26px 34px;
+      }
+
+      .pipeline-step {
+        position: relative;
+        display: grid;
+        min-height: 106px;
+        place-items: center;
+        border-radius: 8px;
+        color: #f5f1e8;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.09em;
+        text-align: center;
+        text-transform: uppercase;
+      }
+
+      .pipeline-step::after {
+        position: absolute;
+        top: 50%;
+        right: -15px;
+        width: 18px;
+        height: 1px;
+        background: #d7ff65;
+        content: "";
+      }
+
+      .pipeline-step:last-child {
+        border-color: #d7ff65;
+        background: rgba(215, 255, 101, 0.08);
+      }
+
+      .pipeline-step:last-child::after {
+        display: none;
+      }
+
+      .pipeline-step:nth-child(1) {
+        animation: pulse-border 2.8s ease-in-out infinite;
+      }
+
+      .pipeline-step:nth-child(2) {
+        animation: pulse-border 2.8s 0.6s ease-in-out infinite;
+      }
+
+      .pipeline-step:nth-child(3) {
+        animation: pulse-border 2.8s 1.2s ease-in-out infinite;
+      }
+
+      .pipeline-step:nth-child(4) {
+        animation: pulse-border 2.8s 1.8s ease-in-out infinite;
+      }
+
+      .decision-board {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        padding: 59px 22px 22px;
+      }
+
+      .request-box,
+      .candidate-list {
+        min-height: 240px;
+        padding: 16px;
+        border: 1px solid #433b31;
+        border-radius: 8px;
+        background: rgba(20, 19, 17, 0.82);
+      }
+
+      .mini-label {
+        margin-bottom: 17px;
+        color: #756f67;
+        font-size: 9px;
+        font-weight: 900;
+        letter-spacing: 0.18em;
+      }
+
+      .request-title {
+        margin: 0;
+        color: #d7ff65;
+        font-size: 20px;
+        font-weight: 750;
+      }
+
+      .request-copy {
+        margin: 14px 0 25px;
+        color: #aaa39a;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .constraint {
+        display: inline-block;
+        margin: 0 4px 5px 0;
+        padding: 5px 7px;
+        border: 1px solid #575043;
+        border-radius: 4px;
+        color: #cfc7ba;
+        font-size: 9px;
+        letter-spacing: 0.06em;
+      }
+
+      .candidate-list {
+        display: grid;
+        gap: 9px;
+        align-content: start;
+      }
+
+      .candidate {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 11px;
+        border-radius: 6px;
+        color: #b8b0a3;
+        font-size: 11px;
+      }
+
+      .candidate strong {
+        color: #f5f1e8;
+        font-size: 12px;
+      }
+
+      .candidate span {
+        color: #756f67;
+        font-size: 9px;
+        letter-spacing: 0.08em;
+      }
+
+      .candidate.selected {
+        border-color: #d7ff65;
+        background: rgba(215, 255, 101, 0.1);
+      }
+
+      .candidate.selected span {
+        color: #d7ff65;
+      }
+
+      .candidate.eliminated {
+        opacity: 0.45;
+        text-decoration: line-through;
+      }
+
+      .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 14px;
+        padding: 66px 30px 28px;
+      }
+
+      .metric-card {
+        min-height: 112px;
+        padding: 18px;
+        border-radius: 8px;
+      }
+
+      .metric-card span {
+        display: block;
+        color: #756f67;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .metric-card strong {
+        display: block;
+        margin-top: 14px;
+        color: #f5f1e8;
+        font-size: 27px;
+        letter-spacing: -0.04em;
+      }
+
+      .metric-card strong::first-letter {
+        color: #d7ff65;
+      }
+
+      .cta-panel {
+        display: flex;
+        min-height: 330px;
+        flex-direction: column;
+        justify-content: center;
+        padding: 40px;
+      }
+
+      .cta-mark {
+        display: grid;
+        width: 58px;
+        height: 58px;
+        margin-bottom: 25px;
+        place-items: center;
+        border: 1px solid #d7ff65;
+        border-radius: 16px;
+        color: #d7ff65;
+        font-size: 28px;
+        font-weight: 900;
+        animation: rotate-mark 8s linear infinite;
+      }
+
+      .cta-url {
+        color: #d7ff65;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .cta-repo {
+        margin-top: 10px;
+        color: #8d887f;
+        font-size: 12px;
+      }
+
+      .footer {
+        gap: 24px;
+        height: 20px;
+        padding-top: 17px;
+        border-top: 1px solid #2b2824;
+      }
+
+      .progress-track {
+        flex: 1;
+        height: 2px;
+        overflow: hidden;
+        background: #322c25;
+      }
+
+      #progress {
+        width: 0;
+        height: 100%;
+        background: #d7ff65;
+        transform-origin: left center;
+      }
+
+      #timecode {
+        min-width: 38px;
+        color: #d7ff65;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      .scene-in {
+        animation: scene-in 700ms cubic-bezier(0.2, 0.75, 0.2, 1) both;
+      }
+
+      @keyframes scene-in {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes float {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-7px);
+        }
+      }
+
+      @keyframes grow {
+        from {
+          transform: translateX(-18%);
+        }
+        to {
+          transform: translateX(70%);
+        }
+      }
+
+      @keyframes pulse-border {
+        0%,
+        100% {
+          box-shadow: 0 0 0 rgba(215, 255, 101, 0);
+        }
+        50% {
+          box-shadow: 0 0 22px rgba(215, 255, 101, 0.14);
+        }
+      }
+
+      @keyframes rotate-mark {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (max-width: 1060px) {
+        #stage {
+          padding-right: 40px;
+          padding-left: 40px;
+        }
+
+        #scene {
+          gap: 30px;
+        }
+
+        h1 {
+          font-size: 54px;
+        }
+
+        .subhead {
+          font-size: 15px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="stage">
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">↗</span><span>LLM ROUTER</span></div>
+        <div class="topbar-right">
+          <span><strong>OPEN SOURCE</strong></span
+          ><span>DECISION-ONLY MODE</span>
+        </div>
+      </header>
+
+      <section id="scene" aria-live="polite">
+        <div class="copy">
+          <p id="eyebrow" class="eyebrow"></p>
+          <h1 id="headline"></h1>
+          <p id="subhead" class="subhead"></p>
+          <div id="scene-index" class="scene-index"></div>
+        </div>
+        <div id="visual"></div>
+      </section>
+
+      <footer class="footer">
+        <span>MAKE EVERY MODEL CHOICE EXPLAINABLE</span>
+        <div class="progress-track"><div id="progress"></div></div>
+        <span id="timecode">00:00</span>
+      </footer>
+    </main>
+
+    <script>
+      (() => {
+        const DURATION_MS = 42000;
+        const scenes = [
+          {
+            duration: 5000,
+            eyebrow: "THE PROBLEM",
+            headline: "AI requests are not <em>all the same.</em>",
+            subhead: "Code, OCR, long context and agents need different models.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <span class="visual-label">REQUEST TYPES</span>
+                <div class="signal-grid">
+                  <div class="signal-card"><span>code-review</span><i></i><small>capability</small></div>
+                  <div class="signal-card"><span>invoice-ocr</span><i></i><small>vision</small></div>
+                  <div class="signal-card"><span>long-summary</span><i></i><small>context</small></div>
+                  <div class="signal-card"><span>agent-tools</span><i></i><small>reliability</small></div>
+                </div>
+              </div>`,
+          },
+          {
+            duration: 6000,
+            eyebrow: "THE WRONG CHOICE COSTS",
+            headline: "One model for everything creates unpredictable <em>cost and latency.</em>",
+            subhead: "When routing becomes hardcoded, every exception adds risk.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <span class="visual-label">HARD-CODED ROUTING</span>
+                <div class="warning-copy">
+                  <div class="warning-number">∞</div>
+                  <strong>exceptions, fallbacks and decisions that are hard to audit.</strong>
+                  <span>one model ≠ every workload</span>
+                </div>
+                <div class="warning-line"></div>
+              </div>`,
+          },
+          {
+            duration: 9000,
+            eyebrow: "THE SOLUTION",
+            headline: "Turn model selection into a <em>testable policy.</em>",
+            subhead:
+              "LLM Router applies constraints before scoring — and keeps every step visible.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <span class="visual-label">ROUTING PIPELINE</span>
+                <div class="pipeline">
+                  <div class="pipeline-step">Normalize</div>
+                  <div class="pipeline-step">Filter</div>
+                  <div class="pipeline-step">Score</div>
+                  <div class="pipeline-step">Select</div>
+                </div>
+              </div>`,
+          },
+          {
+            duration: 10000,
+            eyebrow: "EXPLAINABLE DECISION",
+            headline: "Eliminate first. Score next. <em>Always explain.</em>",
+            subhead: "A code review decision, from request to selected model.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <span class="visual-label">DECISION TRACE · #DEMO-042</span>
+                <div class="decision-board">
+                  <div class="request-box">
+                    <div class="mini-label">REQUEST</div>
+                    <p class="request-title">code-review</p>
+                    <p class="request-copy">Return structured issues for this TypeScript function.</p>
+                    <span class="constraint">structured output</span><span class="constraint">tools</span>
+                  </div>
+                  <div class="candidate-list">
+                    <div class="mini-label">CANDIDATES</div>
+                    <div class="candidate selected"><strong>demo-code-pro</strong><span>SELECTED · 0.91</span></div>
+                    <div class="candidate"><strong>demo-economy</strong><span>LOWER COST</span></div>
+                    <div class="candidate eliminated"><strong>demo-vision</strong><span>NO TOOLS</span></div>
+                    <div class="candidate eliminated"><strong>demo-long-context</strong><span>NO FIT</span></div>
+                  </div>
+                </div>
+              </div>`,
+          },
+          {
+            duration: 6000,
+            eyebrow: "BUILT FOR PRODUCTION",
+            headline: "Cost. Privacy. Latency. <em>Reliability.</em>",
+            subhead:
+              "Choose with context — without turning your application into a web of if/else.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <span class="visual-label">POLICY SIGNALS</span>
+                <div class="metrics-grid">
+                  <div class="metric-card"><span>task fit</span><strong>+0.91</strong></div>
+                  <div class="metric-card"><span>latency</span><strong>42 ms</strong></div>
+                  <div class="metric-card"><span>privacy</span><strong>strict</strong></div>
+                  <div class="metric-card"><span>fallback</span><strong>ready</strong></div>
+                </div>
+              </div>`,
+          },
+          {
+            duration: 6000,
+            eyebrow: "START NOW",
+            headline: "Make every model choice <em>explainable.</em>",
+            subhead: "Decision-only playground · no API keys · open source.",
+            visual: `
+              <div class="visual-frame scene-in">
+                <div class="cta-panel">
+                  <div class="cta-mark">↗</div>
+                  <div class="cta-url">samvale29.github.io/llm-router</div>
+                  <div class="cta-repo">github.com/SamVale29/llm-router</div>
+                </div>
+              </div>`,
+          },
+        ];
+
+        const eyebrow = document.getElementById("eyebrow");
+        const headline = document.getElementById("headline");
+        const subhead = document.getElementById("subhead");
+        const sceneIndex = document.getElementById("scene-index");
+        const visual = document.getElementById("visual");
+        const progress = document.getElementById("progress");
+        const timecode = document.getElementById("timecode");
+        let currentScene = -1;
+        let startTime = null;
+
+        const render = (elapsed) => {
+          const boundedElapsed = Math.min(elapsed, DURATION_MS - 1);
+          let accumulated = 0;
+          let nextScene = 0;
+          for (let index = 0; index < scenes.length; index += 1) {
+            if (boundedElapsed < accumulated + scenes[index].duration) {
+              nextScene = index;
+              break;
+            }
+            accumulated += scenes[index].duration;
+          }
+
+          if (nextScene !== currentScene) {
+            const scene = scenes[nextScene];
+            currentScene = nextScene;
+            eyebrow.innerHTML = scene.eyebrow;
+            headline.innerHTML = scene.headline;
+            subhead.innerHTML = scene.subhead;
+            sceneIndex.textContent = `${String(nextScene + 1).padStart(2, "0")} / ${String(scenes.length).padStart(2, "0")}`;
+            visual.innerHTML = scene.visual;
+          }
+
+          progress.style.width = `${(boundedElapsed / DURATION_MS) * 100}%`;
+          const seconds = Math.floor(boundedElapsed / 1000);
+          timecode.textContent = `00:${String(seconds).padStart(2, "0")}`;
+          if (elapsed < DURATION_MS) {
+            requestAnimationFrame((now) => render(now - startTime));
+          } else {
+            window.__promoDone = true;
+          }
+        };
+
+        window.__promoReady = true;
+        requestAnimationFrame((now) => {
+          startTime = now;
+          render(0);
+        });
+      })();
+    </script>
+  </body>
+</html>

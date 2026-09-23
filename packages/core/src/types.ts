@@ -54,6 +54,17 @@ export interface RouterMessage {
   content: MessageContent;
   name?: string;
   toolCallId?: string;
+  toolCalls?: ToolCall[];
+}
+
+export interface TokenEstimationOptions {
+  nonTextPartTokens?: number;
+}
+
+export interface InputTokenEstimate {
+  source: "explicit" | "configured" | "default";
+  nonTextParts: number;
+  nonTextPartTokens: number;
 }
 
 export interface RouterTool {
@@ -64,6 +75,7 @@ export interface RouterTool {
 }
 
 export interface RoutingRequest {
+  signal?: AbortSignal;
   id?: string;
   messages: RouterMessage[];
   input?: {
@@ -190,6 +202,7 @@ export interface NormalizedRoutingRequest extends RoutingRequest {
   constraints: RoutingConstraints;
   detectedModalities: Modality[];
   estimatedInputTokens: number;
+  inputTokenEstimate?: InputTokenEstimate;
 }
 
 export interface EliminationReason {
@@ -276,9 +289,16 @@ export interface AdapterUsage {
   cost?: number;
 }
 
+export interface ToolCall {
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
 export interface AdapterResponse<T = unknown> {
   data: T;
   text?: string;
+  toolCalls?: ToolCall[];
   usage?: AdapterUsage;
   raw?: unknown;
 }
@@ -326,6 +346,8 @@ export interface ProviderAttempt {
 export interface ExecutionResult<T = unknown> {
   decision: RoutingDecision;
   response?: T;
+  text?: string;
+  toolCalls?: ToolCall[];
   usage?: AdapterUsage;
   execution: { attempts: ProviderAttempt[]; selectedAttempt?: number; totalDurationMs: number };
 }
@@ -380,6 +402,7 @@ export interface HealthStore {
 export interface BudgetScope {
   type: "request" | "user" | "project" | "period";
   id: string;
+  periodStart?: string;
 }
 
 export interface BudgetUsage {
@@ -400,6 +423,10 @@ export interface UsageEntry {
 export interface BudgetStore {
   getUsage(scope: BudgetScope): Promise<BudgetUsage>;
   recordUsage(entry: UsageEntry): Promise<void>;
+  /** Must atomically compare committed + reserved usage and reserve, across all replicas. */
+  reserve?(entry: UsageEntry, limit: number): Promise<string | null>;
+  /** Idempotent: reconcile actual cost and remove the reservation in one transaction. */
+  settle?(reservationId: string, actualAmount: number): Promise<void>;
 }
 
 export interface StrategyContext {
@@ -534,6 +561,7 @@ export interface RouterHooks {
   beforeSelect?: (context: RouterHookContext) => void | Promise<void>;
   afterSelect?: (context: RouterHookContext) => void | Promise<void>;
   beforeExecute?: (context: RouterHookContext) => void | Promise<void>;
+  onAttemptStart?: (context: RouterHookContext) => void | Promise<void>;
   afterExecute?: (context: RouterHookContext) => void | Promise<void>;
   onAttemptError?: (context: RouterHookContext) => void | Promise<void>;
   onFallback?: (context: RouterHookContext) => void | Promise<void>;
@@ -550,6 +578,7 @@ export interface RouterOptions {
   libraryVersion?: string;
   now?: () => Date;
   random?: () => number;
+  tokenEstimation?: TokenEstimationOptions;
   hooks?: RouterHooks;
   customStrategies?: RoutingStrategy[];
   executeShadowRequests?: boolean;

@@ -31,7 +31,7 @@ export interface EvalReport {
     totalEstimatedCost: number | null;
     p50LatencyMs: number | null;
     p95LatencyMs: number | null;
-    fallbackRate: number;
+    fallbackRate: number | null;
     errorRate: number;
     constraintViolationRate: number;
     routingOverheadP50Ms: number | null;
@@ -96,9 +96,11 @@ export async function evaluateDataset(options: EvaluateOptions): Promise<EvalRep
     .filter((value): value is number => value !== null)
     .sort((a, b) => a - b);
   const overhead = rows.map((row) => row.routingOverheadMs).sort((a, b) => a - b);
-  const baselineTotal = options.baselineCosts
-    ? options.dataset.reduce((sum, item) => sum + (options.baselineCosts?.[item.id] ?? 0), 0)
-    : null;
+  const baselineTotal =
+    options.baselineCosts &&
+    options.dataset.every((item) => Number.isFinite(options.baselineCosts?.[item.id]))
+      ? options.dataset.reduce((sum, item) => sum + (options.baselineCosts?.[item.id] ?? 0), 0)
+      : null;
   const selectedQuality = rows
     .map((row) => row.qualityScore)
     .filter((value): value is number => value !== null);
@@ -107,7 +109,10 @@ export async function evaluateDataset(options: EvaluateOptions): Promise<EvalRep
         .map((item) => options.baselineQuality?.[item.id])
         .filter((value): value is number => value !== undefined)
     : [];
-  const totalCost = costs.length ? costs.reduce((sum, value) => sum + value, 0) : null;
+  const totalCost =
+    costs.length === rows.length && costs.length > 0
+      ? costs.reduce((sum, value) => sum + value, 0)
+      : null;
   return {
     version: "1",
     policyVersion: options.policy.version,
@@ -119,7 +124,7 @@ export async function evaluateDataset(options: EvaluateOptions): Promise<EvalRep
       totalEstimatedCost: totalCost,
       p50LatencyMs: percentile(latencies, 0.5),
       p95LatencyMs: percentile(latencies, 0.95),
-      fallbackRate: 0,
+      fallbackRate: null,
       errorRate:
         rows.filter((row) => row.selectedModelId === null).length / Math.max(1, rows.length),
       constraintViolationRate:
@@ -130,13 +135,15 @@ export async function evaluateDataset(options: EvaluateOptions): Promise<EvalRep
           ? (baselineTotal - totalCost) / baselineTotal
           : null,
       qualityDeltaVsBaseline:
-        selectedQuality.length && baselineQuality.length
+        selectedQuality.length === rows.length &&
+        baselineQuality.length === rows.length &&
+        rows.length > 0
           ? average(selectedQuality) - average(baselineQuality)
           : null,
     },
     rows,
     notes: [
-      "Decision-only evaluation does not call providers by default.",
+      "Decision-only evaluation does not call providers; fallback rate and unmeasured quality are unknown.",
       "Estimated cost is not provider billing; compare quality and latency alongside cost.",
       "Demo catalog values are illustrative and should be replaced with workload observations.",
     ],
@@ -265,6 +272,7 @@ export function renderEvalCsv(report: EvalReport): string {
 export function compareReports(
   baseline: EvalReport,
   candidate: EvalReport,
+  configuredGates: NonNullable<RoutingPolicy["evaluation"]>["gates"] = {},
 ): {
   costDelta: number | null;
   qualityDelta: number | null;
@@ -278,16 +286,32 @@ export function compareReports(
     baseline.summary.totalEstimatedCost,
   );
   const qualityDelta =
-    (candidate.summary.qualityDeltaVsBaseline ?? 0) -
-    (baseline.summary.qualityDeltaVsBaseline ?? 0);
+    candidate.summary.qualityDeltaVsBaseline === null ||
+    baseline.summary.qualityDeltaVsBaseline === null
+      ? null
+      : candidate.summary.qualityDeltaVsBaseline - baseline.summary.qualityDeltaVsBaseline;
   const p95LatencyDelta = ratio(candidate.summary.p95LatencyMs, baseline.summary.p95LatencyMs);
-  const gates = {
+  const gates: Required<NonNullable<RoutingPolicy["evaluation"]>["gates"]> = {
     maxQualityDrop: 0.01,
     minCostReduction: 0,
     maxConstraintViolations: 0,
     maxP95LatencyIncrease: 0.05,
+    ...configuredGates,
   };
-  if (qualityDelta < -gates.maxQualityDrop) failures.push("quality drop exceeded gate");
+  if (
+    candidate.summary.total === 0 ||
+    baseline.summary.total === 0 ||
+    candidate.summary.total !== baseline.summary.total ||
+    candidate.rows.some((row) => !baseline.rows.some((other) => other.id === row.id))
+  )
+    failures.push("reports must cover the same non-empty dataset");
+  if (qualityDelta === null || !Number.isFinite(qualityDelta))
+    failures.push("quality evidence is missing");
+  if (costDelta === null || !Number.isFinite(costDelta)) failures.push("cost evidence is missing");
+  if (p95LatencyDelta === null || !Number.isFinite(p95LatencyDelta))
+    failures.push("latency evidence is missing");
+  if (qualityDelta !== null && qualityDelta < -gates.maxQualityDrop)
+    failures.push("quality drop exceeded gate");
   if (costDelta !== null && -costDelta < gates.minCostReduction)
     failures.push("cost reduction gate not met");
   if (candidate.summary.constraintViolationRate > gates.maxConstraintViolations)
@@ -303,7 +327,7 @@ function percentile(values: number[], fraction: number): number | null {
     : null;
 }
 function average(values: number[]): number {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 function ratio(value: number | null, baseline: number | null): number | null {
   return value === null || baseline === null || baseline === 0
@@ -317,9 +341,15 @@ function formatPercent(value: number | null): string {
   return value === null ? "unknown" : `${(value * 100).toFixed(2)}%`;
 }
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 function csv(value: unknown): string {
-  const text = String(value);
+  const raw = String(value);
+  const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
   return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }

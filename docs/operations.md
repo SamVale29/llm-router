@@ -5,6 +5,7 @@ The repository is safe to explore locally, but a production deployment needs exp
 ## Before exposing a proxy
 
 - Set `authToken` and restrict `allowedOrigins` to known application origins.
+- Keep `exposeModels` disabled unless the model inventory is intentionally public.
 - Keep the proxy bound to a private interface unless an authenticated gateway is in front of it.
 - Keep endpoint allowlists enabled for OpenAI-compatible adapters; reject arbitrary user-supplied URLs.
 - Set payload, request, timeout and rate limits for the expected workload.
@@ -12,7 +13,7 @@ The repository is safe to explore locally, but a production deployment needs exp
 
 ## Health, budgets and resilience
 
-The default health and budget state is in-memory and process-local. For multiple replicas, provide a durable shared implementation before relying on circuit state, reservations or spend ceilings across instances.
+The default health and budget state is in-memory and process-local. A monthly budget without `metadata.userId` or `metadata.projectId` is enforced against the router-wide monthly scope. The in-memory store atomically reserves estimated spend for concurrent requests in one process. For multiple replicas, provide a durable BudgetStore with atomic reserve and idempotent settle. Provider-side spending controls remain necessary when catalog prices or token estimates may be inaccurate.
 
 Monitor at least:
 

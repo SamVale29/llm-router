@@ -3,12 +3,14 @@
   "title": "LLM Router policy",
   "type": "object",
   "required": ["version", "routes"],
+  "additionalProperties": false,
   "properties": {
     "version": {
       "type": "string"
     },
     "defaults": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "fallbackAllowed": {
           "type": "boolean"
@@ -17,7 +19,95 @@
           "enum": ["economy", "balanced", "premium"]
         },
         "strategy": {
-          "type": ["string", "object"]
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "rules",
+                "cheapest-qualified",
+                "fastest-qualified",
+                "weighted-score",
+                "priority",
+                "random-weighted",
+                "round-robin",
+                "cascade",
+                "custom"
+              ]
+            },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "rules",
+                    "cheapest-qualified",
+                    "fastest-qualified",
+                    "weighted-score",
+                    "priority",
+                    "random-weighted",
+                    "round-robin",
+                    "cascade",
+                    "custom"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "weights": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "taskFit": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "quality": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "cost": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "latency": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "reliability": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                },
+                "candidates": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "stages": {
+                  "type": "array"
+                },
+                "seed": {
+                  "type": "number"
+                },
+                "requireObservedLatency": {
+                  "type": "boolean"
+                },
+                "unknownCost": {
+                  "enum": ["allow-with-warning", "exclude"]
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -25,6 +115,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["id", "provider", "model"],
         "properties": {
           "id": {
@@ -47,24 +138,217 @@
     },
     "routes": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "when", "select"],
+        "additionalProperties": false,
+        "required": ["id", "select"],
         "properties": {
           "id": {
             "type": "string"
           },
           "when": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "task": {
+                "type": ["string", "array", "object"]
+              },
+              "modalities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "language": {
+                "type": ["string", "array"]
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": ["string", "number", "boolean"]
+                }
+              }
+            }
           },
           "require": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "inputModalities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "minContextTokens": {
+                "type": "number"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "prefer": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "providers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "select": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "strategy": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "rules",
+                      "cheapest-qualified",
+                      "fastest-qualified",
+                      "weighted-score",
+                      "priority",
+                      "random-weighted",
+                      "round-robin",
+                      "cascade",
+                      "custom"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "required": ["kind"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "rules",
+                          "cheapest-qualified",
+                          "fastest-qualified",
+                          "weighted-score",
+                          "priority",
+                          "random-weighted",
+                          "round-robin",
+                          "cascade",
+                          "custom"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      },
+                      "weights": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "taskFit": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "quality": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "cost": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "latency": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "reliability": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        }
+                      },
+                      "candidates": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "stages": {
+                        "type": "array"
+                      },
+                      "seed": {
+                        "type": "number"
+                      },
+                      "requireObservedLatency": {
+                        "type": "boolean"
+                      },
+                      "unknownCost": {
+                        "enum": ["allow-with-warning", "exclude"]
+                      }
+                    }
+                  }
+                ]
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "weights": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "taskFit": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "quality": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "cost": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "latency": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "reliability": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                }
+              }
+            }
           }
         }
       }

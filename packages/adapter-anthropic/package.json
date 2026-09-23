@@ -2,7 +2,27 @@
   "name": "@llm-router/adapter-anthropic",
   "version": "0.1.0",
   "description": "Anthropic Messages API adapter for LLM Router.",
+  "author": "Sam Vale <samvale29@users.noreply.github.com>",
+  "keywords": [
+    "llm",
+    "ai",
+    "model-routing",
+    "typescript",
+    "anthropic"
+  ],
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SamVale29/llm-router.git",
+    "directory": "packages/adapter-anthropic"
+  },
+  "homepage": "https://github.com/SamVale29/llm-router#readme",
+  "bugs": {
+    "url": "https://github.com/SamVale29/llm-router/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "exports": {
     ".": {

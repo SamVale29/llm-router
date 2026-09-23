@@ -5,12 +5,15 @@ import {
   createRouter,
   definePolicy,
   estimateRequestCost,
+  normalizeRequest,
   normalizedErrorFromUnknown,
   parsePolicyYaml,
+  policyJsonSchema,
   type ProviderAdapter,
   type RoutingPolicy,
 } from "@llm-router/core";
 import { demoCatalog } from "@llm-router/catalog";
+import { sha256 } from "./hash.js";
 
 const defaultPolicy = definePolicy<RoutingPolicy>({
   version: "test-1",
@@ -98,6 +101,59 @@ describe("routing decisions", () => {
     expect(decision.candidates).toHaveLength(1);
   });
 
+  it("warns for the default multimodal token heuristic and supports calibration", async () => {
+    const request = {
+      messages: [
+        {
+          role: "user" as const,
+          content: [
+            { type: "text" as const, text: "Read this image." },
+            {
+              type: "image" as const,
+              source: { type: "url" as const, value: "https://example.invalid/image.png" },
+            },
+          ],
+        },
+      ],
+      hints: { task: "ocr" as const },
+    };
+    const defaultNormalized = normalizeRequest(request);
+    expect(defaultNormalized.inputTokenEstimate).toEqual({
+      source: "default",
+      nonTextParts: 1,
+      nonTextPartTokens: 256,
+    });
+    const defaultDecision = await createRouter({
+      catalog: demoCatalog,
+      policy: defaultPolicy,
+    }).decide(request);
+    expect(
+      defaultDecision.explanation.warnings.some((warning) =>
+        warning.includes("default 256 tokens per non-text part"),
+      ),
+    ).toBe(true);
+
+    const configuredNormalized = normalizeRequest(request, { nonTextPartTokens: 1024 });
+    expect(configuredNormalized.inputTokenEstimate).toEqual({
+      source: "configured",
+      nonTextParts: 1,
+      nonTextPartTokens: 1024,
+    });
+    expect(configuredNormalized.estimatedInputTokens).toBeGreaterThan(
+      defaultNormalized.estimatedInputTokens,
+    );
+    const configuredDecision = await createRouter({
+      catalog: demoCatalog,
+      policy: defaultPolicy,
+      tokenEstimation: { nonTextPartTokens: 1024 },
+    }).decide(request);
+    expect(
+      configuredDecision.explanation.warnings.some((warning) =>
+        warning.includes("default 256 tokens per non-text part"),
+      ),
+    ).toBe(false);
+  });
+
   it("treats unknown capability metadata as incompatible", () => {
     const model = demoCatalog.models.find((candidate) => candidate.id === "demo-private");
     if (!model) throw new Error("fixture missing");
@@ -128,6 +184,93 @@ describe("routing decisions", () => {
         estimatedOutputTokens: 500,
       }).total,
     ).toBeNull();
+  });
+
+  it("applies configured weighted-score weights to candidate totals", async () => {
+    const makePolicy = (
+      weights: RoutingPolicy["routes"][number]["select"]["weights"],
+    ): RoutingPolicy => ({
+      version: "weights-test",
+      routes: [
+        {
+          id: "all",
+          when: {},
+          select: { strategy: { kind: "weighted-score", weights } },
+        },
+      ],
+    });
+    const request = {
+      messages: [{ role: "user" as const, content: "Review this code." }],
+      hints: { task: "code-review" as const },
+    };
+    const costDecision = await createRouter({
+      catalog: demoCatalog,
+      policy: makePolicy({ taskFit: 0, quality: 0, cost: 1, latency: 0, reliability: 0 }),
+    }).decide(request);
+    const qualityDecision = await createRouter({
+      catalog: demoCatalog,
+      policy: makePolicy({ taskFit: 0, quality: 1, cost: 0, latency: 0, reliability: 0 }),
+    }).decide(request);
+    expect(costDecision.selected?.modelId).toBe("demo-economy");
+    expect(qualityDecision.selected?.modelId).toBe("demo-code-pro");
+    expect(costDecision.candidates.map((candidate) => candidate.scores.total)).not.toEqual(
+      qualityDecision.candidates.map((candidate) => candidate.scores.total),
+    );
+  });
+
+  it("generates unique request IDs when callers do not provide one", async () => {
+    const router = createRouter({ catalog: demoCatalog, policy: defaultPolicy });
+    const decisions = await Promise.all(
+      Array.from({ length: 50 }, () =>
+        router.decide({ messages: [{ role: "user", content: "hello" }] }),
+      ),
+    );
+    expect(new Set(decisions.map((decision) => decision.requestId)).size).toBe(50);
+  });
+
+  it("enforces a monthly budget in the global scope when no user or project is supplied", async () => {
+    const policy: RoutingPolicy = {
+      version: "budget-test",
+      models: [{ id: "demo-economy", provider: "demo-openrouter", model: "demo-economy" }],
+      routes: [{ id: "all", when: {}, select: { strategy: { kind: "rules" } } }],
+    };
+    const adapter: ProviderAdapter = {
+      id: "openrouter",
+      validateModel() {
+        return;
+      },
+      async execute() {
+        return { data: { ok: true }, usage: { cost: 0.0003 } };
+      },
+      normalizeError(error) {
+        return normalizedErrorFromUnknown(error);
+      },
+    };
+    const router = createRouter({
+      catalog: demoCatalog,
+      policy,
+      adapters: { openrouter: adapter },
+    });
+    const request = {
+      messages: [{ role: "user" as const, content: "hello" }],
+      constraints: { maxMonthlyBudget: 0.0005 },
+    };
+    await router.execute(request);
+    const blocked = await router.decide(request);
+    expect(blocked.selected).toBeNull();
+    expect(
+      blocked.candidates.some((candidate) =>
+        candidate.eliminatedBy.some((reason) => reason.code === "MONTHLY_BUDGET_EXCEEDED"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("request hashing", () => {
+  it("matches the standard SHA-256 vector for abc", async () => {
+    await expect(sha256("abc")).resolves.toBe(
+      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
   });
 });
 
@@ -191,9 +334,120 @@ describe("resilience", () => {
     ).toBe(true);
     expect(result.execution.attempts.at(-1)?.modelId).toBe("demo-economy");
   });
+
+  it("does not retry a deterministic response schema validation failure", async () => {
+    let calls = 0;
+    const policy: RoutingPolicy = {
+      version: "schema-resilience-test",
+      routes: [{ id: "all", when: {}, select: { strategy: { kind: "rules" } } }],
+      resilience: { retry: { maxAttempts: 3 } },
+    };
+    const adapter: ProviderAdapter = {
+      id: "openai-compatible",
+      validateModel() {
+        return;
+      },
+      async execute() {
+        calls += 1;
+        return { data: { invalid: true } };
+      },
+      normalizeError(error) {
+        return normalizedErrorFromUnknown(error);
+      },
+    };
+    const router = createRouter({
+      catalog: demoCatalog,
+      policy,
+      adapters: { "openai-compatible": adapter },
+    });
+    await expect(
+      router.execute({
+        messages: [{ role: "user", content: "hello" }],
+        output: { schema: { type: "object", required: ["ok"] } },
+      }),
+    ).rejects.toThrow("schema validation");
+    expect(calls).toBe(1);
+  });
+
+  it("retries and falls back on a streaming provider failure before output", async () => {
+    const policy: RoutingPolicy = {
+      version: "stream-resilience-test",
+      models: [
+        { id: "demo-code-pro", provider: "demo-openai", model: "demo-code-pro" },
+        { id: "demo-economy", provider: "demo-openrouter", model: "demo-economy" },
+      ],
+      routes: [
+        {
+          id: "all",
+          when: {},
+          select: { strategy: { kind: "rules" }, candidates: ["demo-code-pro", "demo-economy"] },
+        },
+      ],
+      fallbacks: [{ from: "demo-code-pro", to: ["demo-economy"], on: ["unavailable"] }],
+      resilience: {
+        retry: { maxAttempts: 1, retryableErrors: ["unavailable"] },
+        fallback: { maxModelFallbacks: 1, errors: ["unavailable"] },
+      },
+    };
+    const fail: ProviderAdapter = {
+      id: "openai-compatible",
+      validateModel() {
+        return;
+      },
+      async execute() {
+        throw new Error("503 unavailable");
+      },
+      async *stream() {
+        for (const event of [] as Array<never>) yield event;
+        throw new Error("503 unavailable");
+      },
+      normalizeError(error) {
+        return normalizedErrorFromUnknown(error);
+      },
+    };
+    const success: ProviderAdapter = {
+      id: "openrouter",
+      validateModel() {
+        return;
+      },
+      async execute() {
+        return { data: { ok: true }, text: "fallback response" };
+      },
+      async *stream() {
+        yield { type: "text-delta", text: "fallback response" };
+      },
+      normalizeError(error) {
+        return normalizedErrorFromUnknown(error);
+      },
+    };
+    const router = createRouter({
+      catalog: demoCatalog,
+      policy,
+      adapters: { "openai-compatible": fail, openrouter: success },
+      healthStore: createInMemoryHealthStore({ failureThreshold: 5 }),
+    });
+    const events = [];
+    for await (const event of router.stream({
+      messages: [{ role: "user", content: "hello" }],
+    }))
+      events.push(event);
+    expect(events.some((event) => event.type === "fallback")).toBe(true);
+    expect(
+      events.some((event) => event.type === "text-delta" && event.text.includes("fallback")),
+    ).toBe(true);
+    const complete = events.find((event) => event.type === "complete");
+    expect(complete?.type === "complete" ? complete.result.execution.attempts : []).toHaveLength(2);
+  });
 });
 
 describe("policy validation", () => {
+  it("keeps the generated policy schema aligned with optional route matchers", () => {
+    const schema = policyJsonSchema();
+    const routes = schema.properties as Record<string, unknown>;
+    const routeItems = (routes.routes as { items: { required: string[] } }).items;
+    expect(routeItems.required).toEqual(["id", "select"]);
+  });
+
   it("parses YAML and rejects fallback cycles", () => {
     const parsed = parsePolicyYaml(
       "version: '1'\nroutes:\n  - id: all\n    when: {}\n    select:\n      strategy: rules\n",
@@ -206,5 +460,11 @@ describe("policy validation", () => {
         demoCatalog,
       ),
     ).toThrow("Fallback cycle");
+    expect(() =>
+      parsePolicyYaml(
+        "version: '1'\nroutes:\n  - id: all\n    when: {}\n    select:\n      strategy: cheapest-qualifed\n",
+        demoCatalog,
+      ),
+    ).toThrow("routes.0.select.strategy");
   });
 });

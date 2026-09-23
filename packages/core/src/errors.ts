@@ -36,6 +36,57 @@ export class NoEligibleModelError extends RouterError {
   }
 }
 
+export class HttpAdapterError extends Error {
+  readonly code: ProviderErrorCode;
+  readonly statusCode: number;
+  readonly retryAfterMs?: number;
+
+  constructor(code: ProviderErrorCode, statusCode: number, message: string, retryAfterMs?: number) {
+    super(sanitizeMessage(message));
+    this.name = "HttpAdapterError";
+    this.code = code;
+    this.statusCode = statusCode;
+    if (retryAfterMs !== undefined) this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export async function httpError(
+  response: Response,
+  providerName = "Provider",
+): Promise<HttpAdapterError> {
+  let message = `${providerName} returned HTTP ${response.status}.`;
+  try {
+    const body: unknown = await response.json();
+    const candidate = getNestedValue(body, ["error", "message"]);
+    if (typeof candidate === "string") message = candidate;
+  } catch {
+    /* The provider may return a non-JSON error body. */
+  }
+  const code =
+    response.status === 401
+      ? "authentication"
+      : response.status === 403
+        ? "permission"
+        : response.status === 408
+          ? "timeout"
+          : response.status === 409
+            ? "quota"
+            : response.status === 429
+              ? "rate-limit"
+              : response.status === 400
+                ? "invalid-request"
+                : response.status >= 500
+                  ? "unavailable"
+                  : "unknown";
+  const retryAfter = response.headers.get("retry-after");
+  const retryAfterMs = retryAfter ? parseRetryAfterMs(retryAfter) : undefined;
+  return new HttpAdapterError(code, response.status, message, retryAfterMs);
+}
+
+export function isHttpAdapterError(error: unknown): error is HttpAdapterError {
+  return error instanceof HttpAdapterError;
+}
+
 export function normalizedErrorFromUnknown(
   error: unknown,
   fallback: Partial<NormalizedProviderError> = {},
@@ -59,9 +110,34 @@ export function normalizedErrorFromUnknown(
 
 export function sanitizeMessage(message: string): string {
   return message
-    .replace(/bearer\s+[a-z0-9._-]+/gi, "Bearer [REDACTED]")
-    .replace(/(api[_-]?key|authorization|token|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/(authorization)\s*[:=]\s*bearer\s+[a-z0-9._+\x2f=~-]+/gi, "$1: Bearer [REDACTED]")
+    .replace(/bearer\s+[a-z0-9._+\x2f=~-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-ant-[a-z0-9_-]{12,}\b/gi, "[REDACTED]")
+    .replace(/\bsk-proj-[a-z0-9_-]{12,}\b/gi, "[REDACTED]")
+    .replace(/\bsk-[a-z0-9_-]{16,}\b/gi, "[REDACTED]")
+    .replace(/\bAIza[0-9a-z_-]{20,}\b/gi, "[REDACTED]")
+    .replace(/\bxai-[a-z0-9_-]{12,}\b/gi, "[REDACTED]")
+    .replace(
+      /(api[_-]?key|authorization|token|secret)\s*[:=]\s*(?!bearer\b)[^\s,;]+/gi,
+      "$1=[REDACTED]",
+    )
     .slice(0, 500);
+}
+
+function getNestedValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+function parseRetryAfterMs(value: string): number | undefined {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? undefined : Math.max(0, timestamp - Date.now());
 }
 
 function isNormalizedProviderError(value: unknown): value is NormalizedProviderError {

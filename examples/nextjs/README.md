@@ -1,3 +1,5 @@
-# Next.js integration sketch
+# Next.js route handler example
 
-Create a router once in a server-only module, pass an explicit catalog and policy, and call router.decide or router.execute from a route handler. Keep provider adapters and credentials server-side. The static playground is not a credential store.
+The runnable route handler is `app/api/chat/route.ts`. Copy it into a Next.js App Router project and run `pnpm dev`; the handler uses the standard `Request`/`Response` API and keeps the router, policy, catalog and adapters server-side.
+
+The example uses deterministic mock adapters. The primary adapter fails with a simulated `503`, so both normal and streaming requests demonstrate the router fallback without provider credentials.
