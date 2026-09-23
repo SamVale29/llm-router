@@ -93,8 +93,13 @@ jobs:
         run: docker compose -f packages/proxy/docker-compose.yml up --build -d
       - name: Verify authenticated decision endpoint
         run: |
-          curl --fail --retry 20 --retry-connrefused --retry-delay 2 -H 'Authorization: Bearer ci-smoke-token' http://127.0.0.1:8787/health
+          curl --fail --retry 20 --retry-all-errors --retry-max-time 60 --connect-timeout 2 --retry-delay 2 -H 'Authorization: Bearer ci-smoke-token' http://127.0.0.1:8787/health
           curl --fail -H 'Authorization: Bearer ci-smoke-token' -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:8787/v1/router/decide
+      - name: Show proxy logs on failure
+        if: failure()
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml logs
       - name: Stop proxy
         if: always()
         env:
