@@ -235,11 +235,34 @@ const pages = [
   "Documentation",
 ];
 
+function readSharedScenario(): { policy: string; presetId: string; requestText: string } | null {
+  try {
+    const encoded = new URLSearchParams(window.location.hash.slice(1)).get("scenario");
+    if (!encoded || encoded.length > 200_000) return null;
+    const value = JSON.parse(
+      new TextDecoder().decode(
+        Uint8Array.from(window.atob(encoded.replaceAll(" ", "+")), (char) => char.charCodeAt(0)),
+      ),
+    ) as Record<string, unknown>;
+    if (
+      typeof value.policy !== "string" ||
+      typeof value.presetId !== "string" ||
+      typeof value.requestText !== "string" ||
+      !presets.some((preset) => preset.id === value.presetId)
+    )
+      return null;
+    return value as { policy: string; presetId: string; requestText: string };
+  } catch {
+    return null;
+  }
+}
+
 function App(): ReactElement {
-  const [policy, setPolicy] = useState(policyText);
-  const [presetId, setPresetId] = useState("code-review");
+  const [shared] = useState(readSharedScenario);
+  const [policy, setPolicy] = useState(shared?.policy ?? policyText);
+  const [presetId, setPresetId] = useState(shared?.presetId ?? "code-review");
   const [requestText, setRequestText] = useState(
-    messageContentToText(presets[0]?.request.messages[0]?.content),
+    shared?.requestText ?? messageContentToText(presets[0]?.request.messages[0]?.content),
   );
   const [decision, setDecision] = useState<RoutingDecision | null>(null);
   const [page, setPage] = useState("Overview");
@@ -330,9 +353,14 @@ function App(): ReactElement {
     setDecision(null);
   };
   const shareScenario = (): void => {
-    const encoded = window.btoa(unescape(encodeURIComponent(JSON.stringify({ policy, presetId }))));
-    window.history.replaceState({}, "", "#scenario=" + encoded);
-    void navigator.clipboard?.writeText(window.location.href);
+    const bytes = new TextEncoder().encode(JSON.stringify({ policy, presetId, requestText }));
+    if (bytes.length > 100_000) {
+      setPolicyError("Scenario is too large to share in a URL.");
+      return;
+    }
+    const encoded = window.btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+    window.history.replaceState({}, "", "#scenario=" + encodeURIComponent(encoded));
+    void navigator.clipboard?.writeText(window.location.href).catch(() => undefined);
   };
 
   return (

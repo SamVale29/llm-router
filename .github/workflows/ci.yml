@@ -65,3 +65,38 @@ jobs:
           languages: javascript-typescript
       - uses: github/codeql-action/autobuild@v4
       - uses: github/codeql-action/analyze@v4
+  audit-required:
+    name: audit-required
+    if: always()
+    needs: [quality, dependency-review, codeql, container-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all validation jobs
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          DEPENDENCIES: ${{ needs.dependency-review.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          CONTAINER: ${{ needs.container-smoke.result }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          test "$QUALITY" = success
+          test "$CODEQL" = success
+          test "$CONTAINER" = success
+          if [ "$EVENT" = pull_request ]; then test "$DEPENDENCIES" = success; fi
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start decision-only proxy
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml up --build -d
+      - name: Verify authenticated decision endpoint
+        run: |
+          curl --fail --retry 20 --retry-connrefused --retry-delay 2 -H 'Authorization: Bearer ci-smoke-token' http://127.0.0.1:8787/health
+          curl --fail -H 'Authorization: Bearer ci-smoke-token' -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hello"}]}' http://127.0.0.1:8787/v1/router/decide
+      - name: Stop proxy
+        if: always()
+        env:
+          LLM_ROUTER_PROXY_TOKEN: ci-smoke-token
+        run: docker compose -f packages/proxy/docker-compose.yml down

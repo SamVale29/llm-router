@@ -13,7 +13,7 @@ The repository is safe to explore locally, but a production deployment needs exp
 
 ## Health, budgets and resilience
 
-The default health and budget state is in-memory and process-local. A monthly budget without `metadata.userId` or `metadata.projectId` is enforced against the router-wide monthly scope. The in-memory store does not reserve spend atomically for concurrent requests; for multiple replicas or strict spend ceilings, provide a durable reservation-backed implementation.
+The default health and budget state is in-memory and process-local. A monthly budget without `metadata.userId` or `metadata.projectId` is enforced against the router-wide monthly scope. The in-memory store atomically reserves estimated spend for concurrent requests in one process. For multiple replicas, provide a durable BudgetStore with atomic reserve and idempotent settle. Provider-side spending controls remain necessary when catalog prices or token estimates may be inaccurate.
 
 Monitor at least:
 

@@ -11,6 +11,7 @@ import type {
   NormalizedRoutingRequest,
   ProviderAdapter,
   RouterMessage,
+  ToolCall,
 } from "@llm-router/core";
 
 export interface AnthropicAdapterOptions {
@@ -66,28 +67,49 @@ export function createAnthropicAdapter(options: AnthropicAdapterOptions): Provid
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      const calls = new Map<number, ToolCall>();
+      const process = function* (line: string): Generator<AdapterStreamEvent> {
+        const data = parseSseData(line);
+        if (data === undefined) return;
+        const parsed = parseSseJson(data);
+        if (getPath(parsed, ["type"]) === "error") throw new Error("Anthropic stream unavailable.");
+        const delta = getPath(parsed, ["delta", "text"]);
+        if (typeof delta === "string") yield { type: "text-delta", text: delta };
+        const index = Number(getPath(parsed, ["index"]) ?? 0);
+        if (getPath(parsed, ["content_block", "type"]) === "tool_use")
+          calls.set(index, {
+            callId: String(getPath(parsed, ["content_block", "id"])),
+            name: String(getPath(parsed, ["content_block", "name"])),
+            arguments: "",
+          });
+        const fragment = getPath(parsed, ["delta", "partial_json"]);
+        const call = calls.get(index);
+        if (call && typeof fragment === "string") {
+          call.arguments += fragment;
+          if (call.arguments.length > 8_000_000)
+            throw new Error("Provider tool arguments exceed limit.");
+        }
+        if (call && getPath(parsed, ["type"]) === "content_block_stop") {
+          yield { type: "tool-call", ...call, arguments: call.arguments || "{}" };
+          calls.delete(index);
+        }
+        const usage = getPath(parsed, ["usage"]) ?? getPath(parsed, ["message", "usage"]);
+        if (usage && typeof usage === "object")
+          yield { type: "usage", usage: normalizeUsage(usage) };
+      };
       try {
         while (true) {
           const chunk = await reader.read();
           if (chunk.done) break;
           buffer += decoder.decode(chunk.value, { stream: true });
+          if (buffer.length > 8_000_000) throw new Error("Provider SSE frame exceeds limit.");
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            const data = parseSseData(line);
-            if (data === undefined) continue;
-            const parsed = parseSseJson(data);
-            const delta = getPath(parsed, ["delta", "text"]);
-            if (typeof delta === "string") yield { type: "text-delta", text: delta };
-          }
+          for (const line of lines) yield* process(line);
         }
-        const data = parseSseData(buffer);
-        if (data !== undefined) {
-          const parsed = parseSseJson(data);
-          const delta = getPath(parsed, ["delta", "text"]);
-          if (typeof delta === "string") yield { type: "text-delta", text: delta };
-        }
+        yield* process(buffer + decoder.decode());
       } finally {
+        await reader.cancel().catch(() => undefined);
         reader.releaseLock();
       }
     },
@@ -116,8 +138,20 @@ function toPayload(
   const messages = mergeMessages(
     request.messages.filter((message) => message.role !== "system").flatMap(toMessages),
   );
+  const providerOptions = { ...request.providerOptions?.anthropic };
+  for (const key of [
+    "model",
+    "messages",
+    "system",
+    "max_tokens",
+    "tools",
+    "stream",
+    "output_config",
+  ])
+    delete providerOptions[key];
   return {
-    ...(request.providerOptions?.anthropic ?? {}),
+    ...providerOptions,
+    stream: false,
     model: model.apiModelId,
     max_tokens: request.output.maxTokens ?? 512,
     ...(system ? { system } : {}),
@@ -131,7 +165,7 @@ function toPayload(
           })),
         }
       : {}),
-    ...(request.output.schema
+    ...(request.output.schema !== undefined
       ? {
           output_config: {
             format: { type: "json_schema", schema: request.output.schema },
@@ -147,6 +181,26 @@ interface AnthropicMessage {
 }
 
 function toMessages(message: RouterMessage): AnthropicMessage[] {
+  if (
+    Array.isArray(message.content) &&
+    message.content.some((part) => part.type === "audio" || part.type === "video")
+  )
+    throw new Error("Unsupported Anthropic input modality.");
+  if (message.role === "assistant" && message.toolCalls?.length)
+    return [
+      {
+        role: "assistant",
+        content: [
+          ...(contentText(message) ? [{ type: "text", text: contentText(message) }] : []),
+          ...message.toolCalls.map((call) => ({
+            type: "tool_use",
+            id: call.callId,
+            name: call.name,
+            input: JSON.parse(call.arguments) as unknown,
+          })),
+        ],
+      },
+    ];
   if (message.role === "tool")
     return [
       {
@@ -206,10 +260,26 @@ function contentText(message: RouterMessage): string {
 async function parseResponse(response: Response, model: ModelDefinition): Promise<AdapterResponse> {
   rejectRedirect(response);
   const body: unknown = await response.json();
-  const content = getPath(body, ["content", 0, "text"]);
+  const blocks = getPath(body, ["content"]);
+  const content = Array.isArray(blocks)
+    ? blocks
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("")
+    : undefined;
+  const toolCalls = Array.isArray(blocks)
+    ? blocks
+        .filter((block) => block.type === "tool_use")
+        .map((block) => ({
+          callId: String(block.id),
+          name: String(block.name),
+          arguments: JSON.stringify(block.input),
+        }))
+    : [];
   const usage = getPath(body, ["usage"]);
   return {
     data: body,
+    toolCalls,
     ...(typeof content === "string" ? { text: content } : {}),
     ...(usage && typeof usage === "object" ? { usage: normalizeUsage(usage) } : {}),
     raw: { provider: model.providerId },

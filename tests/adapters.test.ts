@@ -96,7 +96,7 @@ describe("adapter contract", () => {
       { signal: new AbortController().signal, requestId: "r", attempt: 1, timeoutMs: 1000 },
     );
     expect(payload?.model).toBe("api-model");
-    expect(payload?.request_id).toBe("r");
+    expect(payload?.request_id).toBeUndefined();
     const messages = payload?.messages as Array<Record<string, unknown>>;
     const content = messages[0]?.content as Array<Record<string, unknown>>;
     expect((content[0]?.image_url as Record<string, unknown>)?.url).toBe(
@@ -290,5 +290,146 @@ describe("adapter contract", () => {
     expect(validateEndpoint("https://169.254.169.254", ["169.254.169.254"])).toContain(
       "169.254.169.254",
     );
+  });
+});
+
+describe("audited provider mapping", () => {
+  const context = {
+    signal: new AbortController().signal,
+    requestId: "r",
+    attempt: 1,
+    timeoutMs: 1000,
+  };
+  it.each(["openai", "openrouter"] as const)(
+    "uses the %s namespace without allowing model or stream overrides",
+    async (namespace) => {
+      let payload: Record<string, unknown> = {};
+      const options = {
+        fetchImpl: (async (_input, init) => {
+          payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Response.json({
+            choices: [
+              {
+                message: {
+                  content: "OK",
+                  tool_calls: [{ id: "c1", function: { name: "f", arguments: "{}" } }],
+                },
+              },
+            ],
+          });
+        }) as typeof fetch,
+      };
+      const adapter =
+        namespace === "openai" ? createOpenAIAdapter(options) : createOpenRouterAdapter(options);
+      const result = await adapter.execute(
+        {
+          ...request,
+          providerOptions: {
+            [namespace]: {
+              temperature: 0.25,
+              model: "b",
+              stream: true,
+              max_completion_tokens: 9999,
+            },
+          },
+        },
+        model,
+        context,
+      );
+      expect(payload).toMatchObject({ model: "api-model", temperature: 0.25, stream: false });
+      expect(payload).not.toHaveProperty("request_id");
+      expect(payload).not.toHaveProperty("max_completion_tokens");
+      expect(result.toolCalls).toEqual([{ callId: "c1", name: "f", arguments: "{}" }]);
+    },
+  );
+  it("assembles fragmented OpenAI tool calls and final usage", async () => {
+    const frames = [
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: "c1", function: { name: "lookup", arguments: '{"q":' } },
+              ],
+            },
+          },
+        ],
+      },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] } }] },
+      { choices: [], usage: { prompt_tokens: 5, completion_tokens: 3 } },
+    ];
+    const adapter = createOpenAICompatibleAdapter({
+      endpoint: "https://example.test",
+      fetchImpl: async () =>
+        new Response(
+          frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n",
+        ),
+    });
+    const events = [];
+    for await (const event of adapter.stream!(request, model, context)) events.push(event);
+    expect(events).toContainEqual({
+      type: "tool-call",
+      callId: "c1",
+      name: "lookup",
+      arguments: '{"q":"x"}',
+    });
+    expect(events).toContainEqual({ type: "usage", usage: { inputTokens: 5, outputTokens: 3 } });
+  });
+  it("preserves Anthropic tool blocks and stream usage", async () => {
+    const frames = [
+      { type: "message_start", message: { usage: { input_tokens: 5 } } },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "c1", name: "lookup" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: "{}" },
+      },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", usage: { output_tokens: 2 } },
+    ];
+    const adapter = createAnthropicAdapter({
+      fetchImpl: async () =>
+        new Response(
+          frames
+            .map((frame) => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`)
+            .join(""),
+        ),
+    });
+    const events = [];
+    for await (const event of adapter.stream!(request, model, context)) events.push(event);
+    expect(events).toContainEqual({
+      type: "tool-call",
+      callId: "c1",
+      name: "lookup",
+      arguments: "{}",
+    });
+    expect(events).toContainEqual({ type: "usage", usage: { outputTokens: 2 } });
+  });
+  it("keeps Google schema configuration when no output limit is supplied", async () => {
+    let payload: Record<string, unknown> = {};
+    const adapter = createGoogleAdapter({
+      fetchImpl: async (_input, init) => {
+        payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json({
+          candidates: [{ content: { parts: [{ functionCall: { name: "lookup", args: {} } }] } }],
+        });
+      },
+    });
+    const result = await adapter.execute(
+      { ...request, output: { schema: { type: "object" } } },
+      model,
+      context,
+    );
+    expect(payload).toMatchObject({
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: { type: "object" },
+      },
+    });
+    expect(result.toolCalls?.[0]?.name).toBe("lookup");
   });
 });

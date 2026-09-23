@@ -71,7 +71,7 @@ export function checkCompatibility(
         field: `capabilities.${capability}`,
       });
   }
-  if (request.output?.schema && !hasCapability(model, "structured-outputs"))
+  if (request.output?.schema !== undefined && !hasCapability(model, "structured-outputs"))
     reasons.push({
       code: "MISSING_STRUCTURED_OUTPUTS",
       message: "A structured output schema requires confirmed structured output support.",
@@ -114,7 +114,9 @@ export function checkCompatibility(
   if (
     request.estimatedInputTokens > 0 &&
     model.limits.contextTokens != null &&
-    request.estimatedInputTokens > model.limits.contextTokens
+    request.estimatedInputTokens +
+      (request.output.maxTokens ?? Math.min(model.limits.outputTokens ?? 512, 512)) >
+      model.limits.contextTokens
   )
     reasons.push({
       code: "REQUEST_CONTEXT_TOO_LARGE",
@@ -129,6 +131,12 @@ export function checkCompatibility(
     reasons.push({
       code: "OUTPUT_LIMIT_TOO_SMALL",
       message: `The requested output exceeds the model output limit of ${model.limits.outputTokens}.`,
+      field: "limits.outputTokens",
+    });
+  if (constraints.minOutputTokens && model.limits.outputTokens == null)
+    reasons.push({
+      code: "UNKNOWN_OUTPUT_LIMIT",
+      message: "Output limit is unknown under a required minimum.",
       field: "limits.outputTokens",
     });
   if (

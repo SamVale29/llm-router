@@ -1,7 +1,9 @@
 services:
   llm-router:
-    build: ../..
+    build:
+      context: ../..
+      dockerfile: packages/proxy/Dockerfile
     ports:
       - "127.0.0.1:8787:8787"
     environment:
-      LLM_ROUTER_PROXY_TOKEN: "change-me-locally"
+      LLM_ROUTER_PROXY_TOKEN: "${LLM_ROUTER_PROXY_TOKEN:?Set a private proxy token before starting Compose}"

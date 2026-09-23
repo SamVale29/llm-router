@@ -119,13 +119,19 @@ async function serve(args: string[]): Promise<void> {
   const port = Number(valueAfter(args, "--port") ?? 8787);
   const policy = await loadPolicy(policyPath, catalog);
   const adapters = configuredAdapters(catalog);
-  const router = createRouter({ catalog, policy, adapters });
+  const decisionOnly = args.includes("--decision-only");
+  if (!decisionOnly && Object.keys(adapters).length === 0)
+    throw new Error(
+      "No provider adapters configured. Use --decision-only for an offline decision service.",
+    );
+  const router = createRouter({ catalog, policy, adapters, decisionOnly });
   const proxy = createProxyServer({
     router,
     catalog,
     port,
+    host: valueAfter(args, "--host") ?? "127.0.0.1",
     authToken: process.env.LLM_ROUTER_PROXY_TOKEN,
-    enableCompletions: Object.keys(adapters).length > 0,
+    enableCompletions: !decisionOnly,
     exposeModels: args.includes("--expose-models"),
   });
   process.stdout.write(
@@ -175,7 +181,11 @@ async function evalCompare(args: string[]): Promise<void> {
     throw new Error("Usage: llm-router eval compare baseline.json candidate.json");
   const baseline = JSON.parse(await readFile(resolve(baselinePath), "utf8")) as EvalReport;
   const candidate = JSON.parse(await readFile(resolve(candidatePath), "utf8")) as EvalReport;
-  const comparison = compareReports(baseline, candidate);
+  const policyPath = valueAfter(args, "--policy");
+  const policy = policyPath
+    ? await loadPolicy(policyPath, await loadCatalog(valueAfter(args, "--catalog")))
+    : undefined;
+  const comparison = compareReports(baseline, candidate, policy?.evaluation?.gates);
   process.stdout.write(`${JSON.stringify(comparison, null, 2)}\n`);
   if (!comparison.passed) process.exitCode = 2;
 }

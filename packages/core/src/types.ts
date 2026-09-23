@@ -54,6 +54,7 @@ export interface RouterMessage {
   content: MessageContent;
   name?: string;
   toolCallId?: string;
+  toolCalls?: ToolCall[];
 }
 
 export interface TokenEstimationOptions {
@@ -74,6 +75,7 @@ export interface RouterTool {
 }
 
 export interface RoutingRequest {
+  signal?: AbortSignal;
   id?: string;
   messages: RouterMessage[];
   input?: {
@@ -287,9 +289,16 @@ export interface AdapterUsage {
   cost?: number;
 }
 
+export interface ToolCall {
+  callId: string;
+  name: string;
+  arguments: string;
+}
+
 export interface AdapterResponse<T = unknown> {
   data: T;
   text?: string;
+  toolCalls?: ToolCall[];
   usage?: AdapterUsage;
   raw?: unknown;
 }
@@ -337,6 +346,8 @@ export interface ProviderAttempt {
 export interface ExecutionResult<T = unknown> {
   decision: RoutingDecision;
   response?: T;
+  text?: string;
+  toolCalls?: ToolCall[];
   usage?: AdapterUsage;
   execution: { attempts: ProviderAttempt[]; selectedAttempt?: number; totalDurationMs: number };
 }
@@ -412,6 +423,10 @@ export interface UsageEntry {
 export interface BudgetStore {
   getUsage(scope: BudgetScope): Promise<BudgetUsage>;
   recordUsage(entry: UsageEntry): Promise<void>;
+  /** Must atomically compare committed + reserved usage and reserve, across all replicas. */
+  reserve?(entry: UsageEntry, limit: number): Promise<string | null>;
+  /** Idempotent: reconcile actual cost and remove the reservation in one transaction. */
+  settle?(reservationId: string, actualAmount: number): Promise<void>;
 }
 
 export interface StrategyContext {

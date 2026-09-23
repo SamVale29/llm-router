@@ -36,10 +36,26 @@ export function createGoogleAdapter(options: GoogleAdapterOptions): ProviderAdap
       rejectRedirect(response);
       if (!response.ok) throw await httpError(response, "Google");
       const body: unknown = await response.json();
-      const text = getPath(body, ["candidates", 0, "content", "parts", 0, "text"]);
+      const parts = getPath(body, ["candidates", 0, "content", "parts"]);
+      const text = Array.isArray(parts)
+        ? parts
+            .filter((part) => typeof part.text === "string")
+            .map((part) => part.text)
+            .join("")
+        : undefined;
+      const toolCalls = Array.isArray(parts)
+        ? parts
+            .filter((part) => part.functionCall)
+            .map((part, index) => ({
+              callId: String(part.functionCall.id ?? `call-${index}`),
+              name: String(part.functionCall.name),
+              arguments: JSON.stringify(part.functionCall.args ?? {}),
+            }))
+        : [];
       const usage = getPath(body, ["usageMetadata"]);
       return {
         data: body,
+        toolCalls,
         ...(typeof text === "string" ? { text } : {}),
         ...(usage && typeof usage === "object" ? { usage: normalizeUsage(usage) } : {}),
         raw: { provider: model.providerId },
@@ -74,32 +90,57 @@ function toPayload(request: NormalizedRoutingRequest): Record<string, unknown> {
     .map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
       parts:
-        typeof message.content === "string"
-          ? [{ text: message.content }]
-          : message.content.map((part) =>
-              part.type === "text"
-                ? { text: part.text }
-                : part.source.type === "url"
-                  ? { fileData: { fileUri: part.source.value, mimeType: part.source.mediaType } }
-                  : {
-                      inlineData: {
-                        data: part.source.value,
-                        mimeType: part.source.mediaType ?? "application/octet-stream",
-                      },
-                    },
-            ),
+        message.role === "tool"
+          ? [
+              {
+                functionResponse: {
+                  name: message.name ?? message.toolCallId,
+                  response: { result: contentText(message) },
+                },
+              },
+            ]
+          : message.toolCalls?.length
+            ? message.toolCalls.map((call) => ({
+                functionCall: { name: call.name, args: JSON.parse(call.arguments) as unknown },
+              }))
+            : typeof message.content === "string"
+              ? [{ text: message.content }]
+              : message.content.map((part) =>
+                  part.type === "text"
+                    ? { text: part.text }
+                    : part.source.type === "url"
+                      ? {
+                          fileData: { fileUri: part.source.value, mimeType: part.source.mediaType },
+                        }
+                      : {
+                          inlineData: {
+                            data: part.source.value,
+                            mimeType: part.source.mediaType ?? "application/octet-stream",
+                          },
+                        },
+                ),
     }));
+  const providerOptions = { ...request.providerOptions?.google };
+  const generationOptions =
+    providerOptions.generationConfig && typeof providerOptions.generationConfig === "object"
+      ? (providerOptions.generationConfig as Record<string, unknown>)
+      : {};
+  for (const key of ["model", "contents", "systemInstruction", "tools", "generationConfig"])
+    delete providerOptions[key];
   return {
-    ...(request.providerOptions?.google ?? {}),
+    ...providerOptions,
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
     contents,
-    ...(request.output.maxTokens !== undefined || request.output.schema !== undefined
+    ...(request.output.maxTokens !== undefined ||
+    request.output.schema !== undefined ||
+    Object.keys(generationOptions).length > 0
       ? {
           generationConfig: {
+            ...generationOptions,
             ...(request.output.maxTokens !== undefined
               ? { maxOutputTokens: request.output.maxTokens }
               : {}),
-            ...(request.output.schema
+            ...(request.output.schema !== undefined
               ? { responseMimeType: "application/json", responseSchema: request.output.schema }
               : {}),
           },

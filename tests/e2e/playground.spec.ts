@@ -43,3 +43,16 @@ test("renders local replay and evaluation reports", async ({ page }) => {
   await expect(page.getByTestId("evaluation-report")).toContainText("code-review");
   await expect(page.getByTestId("evaluation-report")).toContainText("Decision-only evaluation");
 });
+
+test("restores shared scenarios with custom Unicode request text", async ({ page }) => {
+  await page.goto("/");
+  const text = "Revisão: ação e orçamento — 日本語";
+  const request = page.getByRole("textbox", { name: "Request text" });
+  await request.fill(text);
+  await page.getByRole("button", { name: /Share scenario/ }).click();
+  const sharedUrl = page.url();
+  expect(sharedUrl).toContain("#scenario=");
+  await page.goto("about:blank");
+  await page.goto(sharedUrl);
+  await expect(request).toHaveValue(text);
+});

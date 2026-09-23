@@ -6,10 +6,9 @@ The catalog is passed explicitly to createRouter. Applications can replace the d
 
 Recommended hard constraints include required capabilities, modalities, regions, tags, context and output limits, price ceilings, latency ceilings, privacy requirements and fallback permissions.
 
-The built-in output validator intentionally supports a dependency-free JSON Schema subset: types,
-required/properties, enums, const, anyOf/oneOf/allOf, numeric and string bounds, array bounds,
-`uniqueItems`, `additionalProperties: false` and `email`/`uri` formats. `$ref`, recursive schemas
-and provider-specific extensions are not resolved; supply `input.estimatedTokens` when a request
+The built-in validator uses Ajv with JSON Schema 2020-12, local references and boolean schemas.
+Unknown keywords, invalid schemas and remote references fail explicitly. Schemas are bounded to
+64 KB and 40 nesting levels. Use trusted schemas and regex patterns. Supply `input.estimatedTokens` when a request
 contains high-resolution media and the automatic estimate is not representative. By default, each
 non-text content part contributes 256 estimated input tokens. Configure that heuristic globally when
 you have a calibrated estimate, and the decision will stop warning about the default:
